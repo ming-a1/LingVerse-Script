@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         天道试炼塔自动挑战助手
 // @namespace    https://viayoo.com/trial-tower-mobile
-// @version      4.4.3
+// @version      4.4.5
 // @description  移动端自动挑战天道试炼塔，CSS命名空间隔离，使用服务器bestFloor
 // @author       AutoTrial
 // @match        https://ling.muge.info/*
@@ -55,12 +55,13 @@
         }
     };
 
+    // 默认设置：不启用自动重试，不启用灵石刷新
     const saved = S.get('settings', {
         strategy: 'balanced',
-        autoResume: false,
-        autoReset: false,
+        autoRetry: false,
         targetFloor: 0,
         skipCombat: true,
+        autoRefreshBuffs: false,
         btnPos: {
             b: 80,
             r: 12
@@ -70,6 +71,7 @@
     let running = false,
         curFloor = 0,
         highFloor = 0,
+        currentRunMaxFloor = 0,  // 【修复】本次战斗实际最高层数
         totalFights = 0,
         totalDeaths = 0;
     let loggedIn = false,
@@ -152,7 +154,6 @@
             if (r?.code === 200 && r.data) {
                 const d = r.data;
                 if (d.activeFloor !== undefined) curFloor = d.activeFloor;
-                // 使用服务器返回的 bestFloor
                 if (d.bestFloor !== undefined && d.bestFloor > highFloor) {
                     highFloor = d.bestFloor;
                     S.set('high', highFloor);
@@ -356,9 +357,9 @@
             <div class="tt-game-wait" id="tt-game-wait" style="display:none;">⏳ 等待游戏模块加载...</div>
             <div class="tt-card"><div class="tt-card-title">🎯 天赋策略</div><select class="tt-select" id="tt-strategy"><option value="balanced" ${saved.strategy==='balanced'?'selected':''}>综合评分（推荐）</option><option value="attack" ${saved.strategy==='attack'?'selected':''}>攻击优先</option><option value="defense" ${saved.strategy==='defense'?'selected':''}>防御优先</option><option value="legendary" ${saved.strategy==='legendary'?'selected':''}>传说品质优先</option></select></div>
             <div class="tt-card"><div class="tt-card-title">⚙️ 自动设置</div><div class="tt-switch-group">
-                <div class="tt-switch-item"><label class="tt-switch-label"><span>🔄</span> 失败后自动重来</label><label class="tt-switch"><input type="checkbox" id="tt-auto-resume" ${saved.autoResume?'checked':''}><span class="tt-switch-slider"></span></label></div>
-                <div class="tt-switch-item"><label class="tt-switch-label"><span>💎</span> 自动重置</label><label class="tt-switch"><input type="checkbox" id="tt-auto-reset" ${saved.autoReset?'checked':''}><span class="tt-switch-slider"></span></label></div>
+                <div class="tt-switch-item"><label class="tt-switch-label"><span>🔄</span> 失败后自动重来（含重置）</label><label class="tt-switch"><input type="checkbox" id="tt-auto-retry" ${saved.autoRetry?'checked':''}><span class="tt-switch-slider"></span></label></div>
                 <div class="tt-switch-item"><label class="tt-switch-label"><span>⚡</span> 跳过战斗动画</label><label class="tt-switch"><input type="checkbox" id="tt-skip-combat" ${saved.skipCombat?'checked':''}><span class="tt-switch-slider"></span></label></div>
+                <div class="tt-switch-item"><label class="tt-switch-label"><span>💎</span> 灵石刷新天赋</label><label class="tt-switch"><input type="checkbox" id="tt-auto-refresh-buffs" ${saved.autoRefreshBuffs?'checked':''}><span class="tt-switch-slider"></span></label></div>
             </div></div>
             <div class="tt-card"><div class="tt-card-title">🎯 目标层数（0=不限）</div><input type="number" class="tt-number-input" id="tt-target" value="${saved.targetFloor}" min="0" max="999"></div>
             <div class="tt-btn-group"><button class="tt-btn tt-btn-start" id="tt-start" disabled>▶ 开始挑战</button><button class="tt-btn tt-btn-stop" id="tt-stop" disabled>⏹ 停止</button></div>
@@ -505,43 +506,12 @@
         }
     };
 
+    // 策略权重：显著提高暴击(crit)权重
     const strats = {
-        balanced: {
-            atk: 5,
-            def: 4,
-            hp: 4,
-            mp: 3,
-            leg: 8,
-            rare: 4,
-            com: 2
-        },
-        attack: {
-            atk: 8,
-            def: 2,
-            hp: 3,
-            mp: 3,
-            leg: 7,
-            rare: 5,
-            com: 3
-        },
-        defense: {
-            atk: 3,
-            def: 8,
-            hp: 5,
-            mp: 2,
-            leg: 7,
-            rare: 5,
-            com: 3
-        },
-        legendary: {
-            atk: 3,
-            def: 3,
-            hp: 3,
-            mp: 2,
-            leg: 10,
-            rare: 3,
-            com: 1
-        }
+        balanced: { atk: 5, def: 4, hp: 4, mp: 3, leg: 8, rare: 4, com: 2 },
+        attack: { atk: 8, def: 2, hp: 3, mp: 3, leg: 7, rare: 5, com: 3 },
+        defense: { atk: 3, def: 8, hp: 5, mp: 2, leg: 7, rare: 5, com: 3 },
+        legendary: { atk: 3, def: 3, hp: 3, mp: 2, leg: 10, rare: 3, com: 1 }
     };
 
     function gw() {
@@ -558,6 +528,8 @@
         if (/防御/.test(d)) s += w.def;
         if (/生命|血量/.test(d)) s += w.hp;
         if (/灵力/.test(d)) s += w.mp;
+        // 提高暴击相关天赋的得分权重
+        if (/暴击/.test(d)) s += 15;
         if (/不死/.test(d)) s += 8;
         if (/斩杀/.test(d)) s += 7;
         if (/汲取|天道/.test(d)) s += 7;
@@ -567,17 +539,26 @@
 
     function best(buffs) {
         const w = gw();
-        let b = buffs[0],
-            bs = sb(b, w);
-        for (let i = 1; i < buffs.length; i++) {
-            const s = sb(buffs[i], w);
-            if (s > bs) {
-                bs = s;
-                b = buffs[i];
+        // 1. 如果当前暴击率不足100%，优先选择包含"暴击"的天赋
+        if (stats.cb < 100) {
+            const critBuff = buffs.find(b => (b.desc || b.name || '').includes('暴击'));
+            if (critBuff) {
+                log.add(`优先选择暴击天赋: ${critBuff.name} (当前暴击${Math.round(stats.cb)}%)`, 'success');
+                return critBuff;
             }
         }
-        log.add(`选择: ${b.name} (${b.rarity})`, 'success');
-        return b;
+        // 2. 否则按综合评分选择
+        let bestBuff = buffs[0];
+        let bestScore = sb(bestBuff, w);
+        for (let i = 1; i < buffs.length; i++) {
+            const score = sb(buffs[i], w);
+            if (score > bestScore) {
+                bestScore = score;
+                bestBuff = buffs[i];
+            }
+        }
+        log.add(`综合选择: ${bestBuff.name} (${bestBuff.rarity})`, 'success');
+        return bestBuff;
     }
 
     function wait(ms) {
@@ -605,9 +586,7 @@
                 const token = localStorage.getItem('token');
                 const o = {
                     method: method.toUpperCase(),
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     credentials: 'include'
                 };
                 if (token) o.headers['Authorization'] = 'Bearer ' + token;
@@ -642,37 +621,30 @@
     }
 
     async function doStart() {
-        if (!active && !loggedIn) {
-            log.add('请先登录', 'error');
-            return false;
-        }
-        const ar = document.getElementById('tt-auto-reset').checked;
+        if (!active && !loggedIn) { log.add('请先登录', 'error'); return false; }
         const info = await getInfo();
-        if (!info) {
-            log.add('获取试炼信息失败', 'error');
-            return false;
-        }
+        if (!info) { log.add('获取试炼信息失败', 'error'); return false; }
         if (info.hasActiveTrial) {
             curFloor = info.activeFloor;
             await refreshData();
+            ensureStartMeditate();
             return true;
         }
-        const r = await doApi('post', '/api/trial-tower/start', {
-            useAdPoints: false
-        });
+        const r = await doApi('post', '/api/trial-tower/start', { useAdPoints: false });
         if (r?.code === 200) {
             log.add('开始新试炼', 'success');
             await forceRefresh();
+            ensureStartMeditate();
             return true;
         }
-        if (ar) {
+        // 如果开启了自动重试（同时尝试重置）
+        if (document.getElementById('tt-auto-retry').checked) {
             log.add('尝试灵石重置...');
-            const rr = await doApi('post', '/api/trial-tower/start', {
-                useAdPoints: false
-            });
+            const rr = await doApi('post', '/api/trial-tower/start', { useAdPoints: false });
             if (rr?.code === 200) {
                 log.add('重置成功', 'success');
                 await forceRefresh();
+                ensureStartMeditate();
                 return true;
             }
         }
@@ -694,10 +666,35 @@
         if (!active && !loggedIn) return false;
         const info = await getInfo();
         if (!info?.pendingBuffs?.length) return false;
+        
+        // 如果开启了灵石刷新天赋，尝试刷新一次
+        if (document.getElementById('tt-auto-refresh-buffs').checked) {
+            const currentBuffs = info.pendingBuffs;
+            const selected = best(currentBuffs);
+            // 判断当前选择是否满意（非普通或特殊天赋）
+            if (selected.rarity === '普通') {
+                log.add('当前天赋普通，尝试灵石刷新...', 'info');
+                const refreshRes = await doApi('post', '/api/trial-tower/refresh-buff', { useAdPoints: false });
+                if (refreshRes?.code === 200) {
+                    log.add('天赋已刷新', 'success');
+                    const newInfo = await getInfo();
+                    if (newInfo?.pendingBuffs?.length) {
+                        const newSelected = best(newInfo.pendingBuffs);
+                        const r = await doApi('post', '/api/trial-tower/choose-buff', { buffId: newSelected.id });
+                        if (r?.code === 200) {
+                            log.add(`选择刷新后天赋: ${newSelected.name}`, 'success');
+                            await refreshData();
+                            return true;
+                        }
+                    }
+                } else {
+                    log.add('刷新失败，使用当前天赋', 'info');
+                }
+            }
+        }
+        
         const bb = best(info.pendingBuffs);
-        const r = await doApi('post', '/api/trial-tower/choose-buff', {
-            buffId: bb.id
-        });
+        const r = await doApi('post', '/api/trial-tower/choose-buff', { buffId: bb.id });
         if (r?.code === 200) {
             log.add(`选择天赋: ${bb.name}`, 'success');
             await refreshData();
@@ -726,25 +723,28 @@
         if (running && active) fBtn.classList.add('tt-running');
         else fBtn.classList.remove('tt-running');
     }
-    // ============= 冥想控制核心函数=============
+
     function isMeditating() {
         const medBtn = document.getElementById('meditateBtn');
         return medBtn && medBtn.classList.contains('meditating');
     }
 
     async function ensureStopMeditate() {
-        if (!isMeditating()) return;
+        const isMeditatingNow = isMeditating() || (window.playerInfo?.data?.isMeditating);
+        if (!isMeditatingNow) return;
+        
         log.add('⏸ 暂停冥想', 'info');
         const stopBtn = document.querySelector('.btn-stop-meditate');
         if (stopBtn) stopBtn.click();
+        
         for (let i = 0; i < 15; i++) {
             await wait(1000);
-            if (!isMeditating()) {
+            const btn = document.getElementById('meditateBtn');
+            if (!btn?.classList.contains('meditating')) {
                 log.add('冥想已停止', 'info');
                 return;
             }
-            const sb = document.querySelector('.btn-stop-meditate');
-            if (sb) sb.click();
+            document.querySelector('.btn-stop-meditate')?.click();
         }
         log.add('⚠️ 无法停止冥想', 'error');
     }
@@ -757,49 +757,6 @@
             medBtn.click();
         }
     }
-    // =====================================================
-
-    async function doStart() {
-        if (!active && !loggedIn) { log.add('请先登录', 'error'); return false; }
-        const ar = document.getElementById('tt-auto-reset').checked;
-        const info = await getInfo();
-        if (!info) { log.add('获取试炼信息失败', 'error'); return false; }
-        if (info.hasActiveTrial) {
-            curFloor = info.activeFloor;
-            await refreshData();
-            ensureStartMeditate();   // 试炼已存在，直接恢复冥想
-            return true;
-        }
-        const r = await doApi('post', '/api/trial-tower/start', { useAdPoints: false });
-        if (r?.code === 200) {
-            log.add('开始新试炼', 'success');
-            await forceRefresh();
-            ensureStartMeditate();   // 新试炼创建成功，恢复冥想
-            return true;
-        }
-        if (ar) {
-            log.add('尝试灵石重置...');
-            const rr = await doApi('post', '/api/trial-tower/start', { useAdPoints: false });
-            if (rr?.code === 200) {
-                log.add('重置成功', 'success');
-                await forceRefresh();
-                ensureStartMeditate();
-                return true;
-            }
-        }
-        log.add('无法开始试炼', 'error');
-        return false;
-    }
-
-    async function doFight() {
-        if (!active && !loggedIn) return null;
-        const r = await doApi('post', '/api/trial-tower/fight');
-        if (r?.code !== 200) return null;
-        totalFights++;
-        const d = r.data;
-        if (d.logs?.length) log.add(`第${d.floor||'?'}层: ${d.logs[d.logs.length-1].substring(0,40)}`);
-        return d;
-    }
 
     async function runBattle() {
         if (!running) return;
@@ -807,11 +764,13 @@
         const tf = parseInt(document.getElementById('tt-target').value) || 0;
         try {
             updateStatus('启动中...', 'running');
-            if (!await doStart()) { stopBattle(); return; }   // doStart 成功后已自动恢复冥想
+            if (!await doStart()) { stopBattle(); return; }
             const info = await getInfo();
             if (!info) { stopBattle(); return; }
             curFloor = info.activeFloor || 0;
             if (info.bestFloor !== undefined && info.bestFloor > highFloor) { highFloor = info.bestFloor; S.set('high', highFloor); }
+            // 【修复】初始化本次战斗最高层数
+            if (curFloor > currentRunMaxFloor) currentRunMaxFloor = curFloor;
             if (tf > 0 && curFloor >= tf) { updateStatus(`达到目标 ${tf} 层`, 'completed'); stopBattle(); return; }
             if (info.pendingBuffs?.length) { await doSelect(); await wait(500); }
 
@@ -819,7 +778,6 @@
                 if (!active && !loggedIn) { stopBattle(); return; }
                 if (tf > 0 && curFloor >= tf) { updateStatus(`达到目标 ${tf} 层`, 'completed'); stopBattle(); return; }
 
-                // 不再暂停冥想，战斗过程中保持冥想状态
                 updateStatus(`挑战第${curFloor+1}层...`, 'running');
                 const fr = await doFight();
 
@@ -828,6 +786,8 @@
                 if (fr.victory) {
                     curFloor = fr.floor || curFloor + 1;
                     if (curFloor > highFloor) { highFloor = curFloor; S.set('high', highFloor); }
+                    // 【修复】更新本次战斗最高层数
+                    if (curFloor > currentRunMaxFloor) currentRunMaxFloor = curFloor;
                     updateStatus(`第${curFloor}层通关！`, 'running');
                     await refreshData();
                     if (fr.buffs?.length) {
@@ -844,13 +804,12 @@
                 } else {
                     totalDeaths++;
                     log.add(`第${curFloor+1}层失败`, 'error');
-                    if (document.getElementById('tt-auto-resume').checked) {
+                    if (document.getElementById('tt-auto-retry').checked) {
                         updateStatus('重来中...', 'running');
                         await wait(1500);
-                        // 失败重试前必须取消冥想
                         await ensureStopMeditate();
                         if (!running) return;
-                        if (!await doStart()) { stopBattle(); return; }   // doStart 成功会自动恢复冥想
+                        if (!await doStart()) { stopBattle(); return; }
                         await forceRefresh();
                     } else {
                         updateStatus(`失败于第${curFloor+1}层`, 'stopped');
@@ -870,11 +829,11 @@
     async function startBattle() {
         if (!active && !loggedIn) { toast('请先登录'); return; }
         if (running) return;
-        // 开始挑战前先收功
         await ensureStopMeditate();
         running = true;
         totalFights = 0;
         totalDeaths = 0;
+        currentRunMaxFloor = 0;  // 【修复】重置本次战斗最高层数
         document.getElementById('tt-start').disabled = true;
         document.getElementById('tt-stop').disabled = false;
         document.getElementById('tt-share').disabled = true;
@@ -888,21 +847,21 @@
         document.getElementById('tt-start').disabled = !active;
         document.getElementById('tt-stop').disabled = true;
         document.getElementById('tt-share').disabled = !active;
-        if (totalFights > 0) log.add(`📊 战斗${totalFights}次 死亡${totalDeaths}次 抵达${curFloor}层`);
+        // 【修复】日志中显示本次战斗实际最高层
+        const displayFloor = currentRunMaxFloor > 0 ? currentRunMaxFloor : curFloor;
+        if (totalFights > 0) log.add(`📊 战斗${totalFights}次 死亡${totalDeaths}次 抵达${displayFloor}层`);
         S.set('high', highFloor);
-        // 停止后自动恢复冥想
         ensureStartMeditate();
         setTimeout(() => forceRefresh(), 500);
     }
 
-
     function saveSets() {
         S.set('settings', {
             strategy: document.getElementById('tt-strategy').value,
-            autoResume: document.getElementById('tt-auto-resume').checked,
-            autoReset: document.getElementById('tt-auto-reset').checked,
+            autoRetry: document.getElementById('tt-auto-retry').checked,
             skipCombat: document.getElementById('tt-skip-combat').checked,
             targetFloor: parseInt(document.getElementById('tt-target').value) || 0,
+            autoRefreshBuffs: document.getElementById('tt-auto-refresh-buffs').checked,
             btnPos
         });
     }
@@ -914,50 +873,17 @@
             defense: '防御优先',
             legendary: '传说品质优先'
         };
+        // 【修复】使用本次战斗实际最高层数
+        const reportFloor = currentRunMaxFloor > 0 ? currentRunMaxFloor : curFloor;
         return {
-            cf: highFloor,
+            cf: reportFloor,
             tf: totalFights,
             td: totalDeaths,
             st: sm[document.getElementById('tt-strategy').value] || '综合评分',
             bf: [...buffCombo],
-            ss: {
-                ...stats
-            },
-            ts: new Date().toLocaleString('zh-CN', {
-                hour12: false
-            })
+            ss: { ...stats },
+            ts: new Date().toLocaleString('zh-CN', { hour12: false })
         };
-    }
-    // 辅助函数：确保收功（停止冥想）
-    async function ensureStopMeditate() {
-        // 检查全局 playerInfo 对象（参考您提供的逻辑）
-        const isMeditating = window.playerInfo?.data?.isMeditating ||
-            document.getElementById('meditateBtn')?.classList.contains('meditating');
-
-        if (isMeditating) {
-            const stopBtn = document.querySelector('.btn-stop-meditate');
-            if (stopBtn) {
-                log.add('检测到冥想中，正在收功...', 'info');
-                stopBtn.click();
-                // 轮询等待确保停止
-                for (let i = 0; i < 10; i++) {
-                    await wait(1000);
-                    const medBtn = document.getElementById('meditateBtn');
-                    if (!medBtn?.classList.contains('meditating')) break;
-                    document.querySelector('.btn-stop-meditate')?.click();
-                }
-                log.add('收功完成', 'success');
-            }
-        }
-    }
-
-    // 辅助函数：确保开始冥想
-    async function ensureStartMeditate() {
-        const medBtn = document.getElementById('meditateBtn');
-        if (medBtn && !medBtn.classList.contains('meditating')) {
-            log.add('挑战已开始，恢复冥想以提高效率', 'info');
-            medBtn.click();
-        }
     }
 
     async function genImage(rpt) {
@@ -967,18 +893,9 @@
         let bH = '';
         if (rpt.bf.length) {
             bH = rpt.bf.map((b, i) => {
-                let cl = '#666',
-                    bg = '#f5f5f5',
-                    bc = '#ddd';
-                if (b.rarity === '传说') {
-                    cl = '#b8860b';
-                    bg = '#fff8dc';
-                    bc = '#daa520';
-                } else if (b.rarity === '稀有') {
-                    cl = '#1e6bb8';
-                    bg = '#e8f4fd';
-                    bc = '#5ba3e6';
-                }
+                let cl = '#666', bg = '#f5f5f5', bc = '#ddd';
+                if (b.rarity === '传说') { cl = '#b8860b'; bg = '#fff8dc'; bc = '#daa520'; }
+                else if (b.rarity === '稀有') { cl = '#1e6bb8'; bg = '#e8f4fd'; bc = '#5ba3e6'; }
                 return `<div style="display:flex;align-items:center;padding:14px 0;border-bottom:1px solid #eee;font-size:18px;"><span style="color:${cl};font-weight:bold;min-width:34px;font-size:20px;">${i+1}.</span><span style="color:#222;margin-left:12px;font-weight:600;flex:1;">${b.name}</span><span style="color:${cl};margin-left:14px;font-size:15px;background:${bg};padding:6px 16px;border-radius:20px;border:2px solid ${bc};font-weight:700;">${b.rarity}</span></div>`;
             }).join('');
         } else {
@@ -990,6 +907,7 @@
         if (s.db > 0) items.push(`<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #f0f0f0;font-size:16px;"><span style="color:#333;">🛡️ 防御加成</span><span style="color:#27ae60;font-weight:700;">+${Math.round(s.db)}%</span></div>`);
         if (s.hb > 0) items.push(`<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #f0f0f0;font-size:16px;"><span style="color:#333;">❤️ 生命加成</span><span style="color:#e74c3c;font-weight:700;">+${Math.round(s.hb)}%</span></div>`);
         if (s.mb > 0) items.push(`<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #f0f0f0;font-size:16px;"><span style="color:#333;">✨ 灵力加成</span><span style="color:#8e44ad;font-weight:700;">+${Math.round(s.mb)}%</span></div>`);
+        if (s.cb > 0) items.push(`<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #f0f0f0;font-size:16px;"><span style="color:#333;">💥 暴击加成</span><span style="color:#e74c3c;font-weight:700;">+${Math.round(s.cb)}%</span></div>`);
         if (s.im) items.push(`<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #f0f0f0;font-size:15px;"><span style="color:#333;">✨ 不死</span><span style="color:#b8860b;font-weight:700;">首次HP归零恢复20%HP</span></div>`);
         if (s.ra) items.push(`<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #f0f0f0;font-size:15px;"><span style="color:#333;">🌿 灵根共鸣</span><span style="color:#b8860b;font-weight:700;">灵根战斗特效强化</span></div>`);
         if (s.ex) items.push(`<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #f0f0f0;font-size:15px;"><span style="color:#333;">⚔️ 斩杀</span><span style="color:#b8860b;font-weight:700;">敌人HP<20%伤害翻倍</span></div>`);
@@ -1001,13 +919,7 @@
         c.innerHTML = `<div style="background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:36px 40px;border-radius:14px 14px 0 0;margin:-32px -32px 28px -32px;"><div style="font-size:34px;font-weight:bold;text-align:center;margin-bottom:6px;">⚔️ 天道试炼塔战报</div><div style="text-align:center;font-size:15px;opacity:0.9;">${rpt.ts}</div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:28px;"><div style="background:linear-gradient(135deg,#f0f4ff,#e8eeff);border-radius:12px;padding:22px;border:1px solid #d4dfff;"><div style="font-size:14px;color:#555;margin-bottom:8px;">🏆 最高层数</div><div style="font-size:44px;font-weight:bold;color:#667eea;">${rpt.cf}</div></div><div style="background:linear-gradient(135deg,#fff5f5,#ffe8e8);border-radius:12px;padding:22px;border:1px solid #ffd4d4;"><div style="font-size:14px;color:#555;margin-bottom:8px;">⚔️ 战斗次数</div><div style="font-size:44px;font-weight:bold;color:#e74c3c;">${rpt.tf}</div></div><div style="background:linear-gradient(135deg,#fff8f0,#fff0e0);border-radius:12px;padding:22px;border:1px solid #ffe0c0;"><div style="font-size:14px;color:#555;margin-bottom:8px;">💀 失败次数</div><div style="font-size:44px;font-weight:bold;color:#f39c12;">${rpt.td}</div></div><div style="background:linear-gradient(135deg,#f5fff5,#e8ffe8);border-radius:12px;padding:22px;border:1px solid #d4ffd4;"><div style="font-size:14px;color:#555;margin-bottom:8px;">🎯 天赋策略</div><div style="font-size:18px;font-weight:bold;color:#333;">${rpt.st}</div></div></div>${sH}<div style="background:#f8f9fa;border-radius:12px;padding:24px;margin-bottom:24px;"><div style="font-size:22px;font-weight:bold;color:#333;margin-bottom:16px;padding-left:6px;border-left:4px solid #667eea;">🧬 天赋组合详情 (共${rpt.bf.length}个)</div><div style="background:#fff;border-radius:10px;padding:6px 20px;border:1px solid #eee;">${bH}</div></div><div style="text-align:center;padding-top:18px;border-top:1px solid #eee;color:#aaa;font-size:12px;">由"天道试炼塔自动挑战助手"生成 · ${rpt.ts}</div>`;
         document.body.appendChild(c);
         try {
-            const cv = await html2canvas(c, {
-                scale: 2,
-                backgroundColor: '#fff',
-                allowTaint: true,
-                useCORS: true,
-                logging: false
-            });
+            const cv = await html2canvas(c, { scale: 2, backgroundColor: '#fff', allowTaint: true, useCORS: true, logging: false });
             document.body.removeChild(c);
             return cv;
         } catch (e) {
@@ -1030,30 +942,17 @@
                     await navigator.share({
                         title: '天道试炼塔战报',
                         text: `我在试炼塔达到了第 ${highFloor} 层！`,
-                        files: [new File([b], '战报.png', {
-                            type: 'image/png'
-                        })]
+                        files: [new File([b], '战报.png', { type: 'image/png' })]
                     });
-                } catch (e) {
-                    dlImg(cv);
-                }
+                } catch (e) { dlImg(cv); }
             });
-        } else {
-            dlImg(cv);
-        }
+        } else { dlImg(cv); }
     }
 
-
     async function doShare() {
-        if (!active && !loggedIn) {
-            toast('请先登录');
-            return;
-        }
+        if (!active && !loggedIn) { toast('请先登录'); return; }
         const wr = running;
-        if (wr) {
-            stopBattle();
-            await wait(600);
-        }
+        if (wr) { stopBattle(); await wait(600); }
         try {
             await forceRefresh();
             await wait(400);
@@ -1065,14 +964,14 @@
             const rpt = collectRpt();
             const cv = await genImage(rpt);
             await shareImg(cv);
-            log.add(`✅ 战报分享成功！(最高层数: ${highFloor})`, 'success');
+            // 【修复】日志显示战报实际层数
+            log.add(`✅ 战报分享成功！(最高层数: ${rpt.cf})`, 'success');
         } catch (e) {
             log.add('❌ 战报生成失败', 'error');
         } finally {
             if (wr) startBattle();
         }
     }
-
 
     async function checkLogin() {
         if (document.getElementById('trialTowerContent')) return true;
@@ -1085,131 +984,71 @@
                 if (r && r.code === 200 && r.data) return true;
             } else {
                 const token = localStorage.getItem('token');
-                const headers = {
-                    'Content-Type': 'application/json'
-                };
+                const headers = { 'Content-Type': 'application/json' };
                 if (token) headers['Authorization'] = 'Bearer ' + token;
-                const t = await fetch('/api/trial-tower/info', {
-                    method: 'GET',
-                    credentials: 'include',
-                    headers
-                });
-                if (t && t.ok) {
-                    const d = await t.json();
-                    if (d && d.code === 200) return true;
-                }
+                const t = await fetch('/api/trial-tower/info', { method: 'GET', credentials: 'include', headers });
+                if (t && t.ok) { const d = await t.json(); if (d && d.code === 200) return true; }
             }
         } catch (e) {}
         return false;
     }
 
     function updateLoginUI() {
-        const sb = document.getElementById('tt-status-box'),
-            st = document.getElementById('tt-status-text');
-        const bs = document.getElementById('tt-start'),
-            bh = document.getElementById('tt-share');
-        const lw = document.getElementById('tt-login-warn'),
-            dot = document.getElementById('tt-login-dot');
+        const sb = document.getElementById('tt-status-box'), st = document.getElementById('tt-status-text');
+        const bs = document.getElementById('tt-start'), bh = document.getElementById('tt-share');
+        const lw = document.getElementById('tt-login-warn'), dot = document.getElementById('tt-login-dot');
         if (dot) dot.className = `tt-login-dot ${loggedIn?'tt-online':'tt-offline'}`;
         const db = document.getElementById('tt-domain-badge');
         if (db) db.innerHTML = `<span class="tt-login-dot ${loggedIn?'tt-online':'tt-offline'}" id="tt-login-dot"></span>⚔️ 试炼助手 | ${loggedIn?'✅已登录':'🔒未登录'}`;
         if (loggedIn) {
             active = true;
-            sb.style.background = '#f0f4ff';
-            sb.style.color = '#667eea';
-            st.innerHTML = '✅ 已登录 - 就绪';
-            bs.disabled = false;
-            bs.style.opacity = '1';
-            bs.textContent = '▶ 开始挑战';
-            bh.disabled = false;
-            bh.style.opacity = '1';
-            fBtn.style.opacity = '1';
-            fBtn.style.background = 'linear-gradient(135deg,#667eea,#764ba2)';
-            fBtn.classList.remove('tt-logged-out');
-            lw.style.display = 'none';
-            forceRefresh();
-            log.add('已登录，脚本激活', 'success');
+            sb.style.background = '#f0f4ff'; sb.style.color = '#667eea'; st.innerHTML = '✅ 已登录 - 就绪';
+            bs.disabled = false; bs.style.opacity = '1'; bs.textContent = '▶ 开始挑战';
+            bh.disabled = false; bh.style.opacity = '1';
+            fBtn.style.opacity = '1'; fBtn.style.background = 'linear-gradient(135deg,#667eea,#764ba2)';
+            fBtn.classList.remove('tt-logged-out'); lw.style.display = 'none';
+            forceRefresh(); log.add('已登录，脚本激活', 'success');
         } else {
-            active = false;
-            if (running) stopBattle();
-            sb.style.background = '#fff3cd';
-            sb.style.color = '#856404';
-            st.innerHTML = '🔒 未登录';
-            bs.disabled = true;
-            bs.style.opacity = '0.5';
-            bs.textContent = '🔒 请先登录';
-            bh.disabled = true;
-            bh.style.opacity = '0.5';
-            fBtn.style.opacity = '0.6';
-            fBtn.style.background = '#999';
-            fBtn.classList.add('tt-logged-out');
-            lw.style.display = 'block';
+            active = false; if (running) stopBattle();
+            sb.style.background = '#fff3cd'; sb.style.color = '#856404'; st.innerHTML = '🔒 未登录';
+            bs.disabled = true; bs.style.opacity = '0.5'; bs.textContent = '🔒 请先登录';
+            bh.disabled = true; bh.style.opacity = '0.5';
+            fBtn.style.opacity = '0.6'; fBtn.style.background = '#999';
+            fBtn.classList.add('tt-logged-out'); lw.style.display = 'block';
         }
-        if (running && active) fBtn.classList.add('tt-running');
-        else fBtn.classList.remove('tt-running');
+        if (running && active) fBtn.classList.add('tt-running'); else fBtn.classList.remove('tt-running');
     }
 
-    function onLogin() {
-        if (loggedIn) return;
-        loggedIn = true;
-        active = true;
-        updateLoginUI();
-    }
-
-    function onLogout() {
-        if (!loggedIn) return;
-        loggedIn = false;
-        active = false;
-        if (running) stopBattle();
-        updateLoginUI();
-    }
+    function onLogin() { if (!loggedIn) { loggedIn = true; active = true; updateLoginUI(); } }
+    function onLogout() { if (loggedIn) { loggedIn = false; active = false; if (running) stopBattle(); updateLoginUI(); } }
 
     async function startMonitor() {
         if (loginTimer) clearInterval(loginTimer);
         await wait(1000);
         const init = await checkLogin();
-        loggedIn = init;
-        active = init;
+        loggedIn = init; active = init;
         updateLoginUI();
         console.log(init ? '✅ 检测到已登录状态' : '🔒 未检测到登录状态，脚本待机中');
         loginTimer = setInterval(async () => {
             if (running) return;
             const s = await checkLogin();
-            if (s !== loggedIn) {
-                if (s) onLogin();
-                else onLogout();
-            } else if (loggedIn) await refreshData();
+            if (s !== loggedIn) { if (s) onLogin(); else onLogout(); }
+            else if (loggedIn) await refreshData();
         }, 15000);
     }
 
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) setTimeout(async () => {
             const s = await checkLogin();
-            if (s !== loggedIn) {
-                if (s) onLogin();
-                else onLogout();
-            } else if (loggedIn) await forceRefresh();
+            if (s !== loggedIn) { if (s) onLogin(); else onLogout(); }
+            else if (loggedIn) await forceRefresh();
         }, 500);
     });
     let lu = location.href;
     new MutationObserver(() => {
         const u = location.href;
-        if (u !== lu) {
-            lu = u;
-            setTimeout(async () => {
-                if (!running) {
-                    const s = await checkLogin();
-                    if (s !== loggedIn) {
-                        if (s) onLogin();
-                        else onLogout();
-                    } else if (loggedIn) await forceRefresh();
-                }
-            }, 1000);
-        }
-    }).observe(document, {
-        subtree: true,
-        childList: true
-    });
+        if (u !== lu) { lu = u; setTimeout(async () => { if (!running) { const s = await checkLogin(); if (s !== loggedIn) { if (s) onLogin(); else onLogout(); } else if (loggedIn) await forceRefresh(); } }, 1000); }
+    }).observe(document, { subtree: true, childList: true });
 
     document.getElementById('tt-start').addEventListener('click', startBattle);
     document.getElementById('tt-stop').addEventListener('click', stopBattle);
@@ -1218,62 +1057,30 @@
         const tl = document.getElementById('tt-stats-time');
         if (tl) tl.textContent = '刷新中...';
         await forceRefresh();
-        if (tl) {
-            tl.textContent = '更新于 ' + new Date().toLocaleTimeString().slice(0, 5);
-            setTimeout(() => tl.textContent = '', 3000);
-        }
+        if (tl) { tl.textContent = '更新于 ' + new Date().toLocaleTimeString().slice(0,5); setTimeout(() => tl.textContent = '', 3000); }
     });
-    overlay.addEventListener('click', () => {
-        panel.classList.remove('tt-open');
-        overlay.classList.remove('tt-show');
-    });
-    document.getElementById('tt-minimize').addEventListener('click', () => {
-        panel.classList.remove('tt-open');
-        overlay.classList.remove('tt-show');
-    });
-    ['tt-strategy', 'tt-auto-resume', 'tt-auto-reset', 'tt-skip-combat', 'tt-target'].forEach(id => {
+    overlay.addEventListener('click', () => { panel.classList.remove('tt-open'); overlay.classList.remove('tt-show'); });
+    document.getElementById('tt-minimize').addEventListener('click', () => { panel.classList.remove('tt-open'); overlay.classList.remove('tt-show'); });
+    ['tt-strategy', 'tt-auto-retry', 'tt-skip-combat', 'tt-auto-refresh-buffs', 'tt-target'].forEach(id => {
         const el = document.getElementById(id);
-        if (el) {
-            el.addEventListener('change', saveSets);
-            if (el.type === 'checkbox') el.addEventListener('click', saveSets);
-        }
+        if (el) { el.addEventListener('change', saveSets); if (el.type === 'checkbox') el.addEventListener('click', saveSets); }
     });
     let sy = 0;
-    document.getElementById('tt-drag-handle').addEventListener('touchstart', e => {
-        sy = e.touches[0].clientY;
-    });
-    document.getElementById('tt-drag-handle').addEventListener('touchmove', e => {
-        if (e.touches[0].clientY - sy > 50) {
-            panel.classList.remove('tt-open');
-            overlay.classList.remove('tt-show');
-        }
-    });
-    panel.addEventListener('touchmove', e => {
-        if (e.target === panel || e.target.classList.contains('tt-content')) e.stopPropagation();
-    });
+    document.getElementById('tt-drag-handle').addEventListener('touchstart', e => { sy = e.touches[0].clientY; });
+    document.getElementById('tt-drag-handle').addEventListener('touchmove', e => { if (e.touches[0].clientY - sy > 50) { panel.classList.remove('tt-open'); overlay.classList.remove('tt-show'); } });
+    panel.addEventListener('touchmove', e => { if (e.target === panel || e.target.classList.contains('tt-content')) e.stopPropagation(); });
     setTimeout(() => forceRefresh(), 2000);
 
     if (typeof GM_registerMenuCommand !== 'undefined') {
         GM_registerMenuCommand('▶ 开始挑战', startBattle);
         GM_registerMenuCommand('⏹ 停止挑战', stopBattle);
         GM_registerMenuCommand('📸 生成战报', doShare);
-        GM_registerMenuCommand('🗑 清空缓存', () => {
-            S.set('lb', []);
-            S.set('ls', null);
-            S.set('bh', []);
-            forceRefresh();
-            log.add('缓存已清空', 'info');
-        });
+        GM_registerMenuCommand('🗑 清空缓存', () => { S.set('lb',[]); S.set('ls',null); S.set('bh',[]); forceRefresh(); log.add('缓存已清空','info'); });
         GM_registerMenuCommand('📍 重置按钮', resetPos);
-        GM_registerMenuCommand('🔍 检测登录', async () => {
-            const s = await checkLogin();
-            if (s) onLogin();
-            else onLogout();
-            toast(s ? '✅ 已登录' : '🔒 未登录');
-        });
+        GM_registerMenuCommand('🔍 检测登录', async () => { const s = await checkLogin(); if(s) onLogin(); else onLogout(); toast(s?'✅ 已登录':'🔒 未登录'); });
         GM_registerMenuCommand('🔄 刷新数据', forceRefresh);
     }
 
     startMonitor();
-    console.log('✅ 天道试炼塔助手 v4.4.3 已加载');
+    console.log('✅ 天道试炼塔助手 v4.4.5 已加载');
 })();
