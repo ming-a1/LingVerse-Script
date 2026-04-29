@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         天道试炼塔自动挑战助手
 // @namespace    ling-trial-tower-assistant
-// @version      4.2.8
-// @description  PC+移动端自动挑战天道试炼塔，事件驱动冥想控制、暴击优先、灵石刷新（修复天赋丢失）
+// @version      4.2.9
+// @description  PC+移动端自动挑战天道试炼塔，事件驱动冥想控制、暴击满后降权、灵石刷新、主题切换、冥想开关
 // @author       AutoTrial
 // @match        https://ling.muge.info/*
 // @match        http://ling.muge.info/*
@@ -27,7 +27,7 @@
 
     // ============ GM兼容存储 ============
     const Storage = {
-        KEY: 'auto_trial_settings_v428',
+        KEY: 'auto_trial_settings_v429',
         save(settings) {
             try {
                 const data = JSON.stringify(settings);
@@ -46,6 +46,8 @@
                 autoRetry: false,
                 skipCombat: true,
                 refreshWithGems: false,
+                meditateEnabled: false,
+                theme: 'light',
                 targetFloor: 0,
                 btnPos: { top: 80, right: 12 }
             };
@@ -84,6 +86,7 @@
     }
 
     function ensureStartMeditate() {
+        if (!G('meditateEnabled')?.checked) return;
         if (isMeditating()) return;
         const medBtn = document.getElementById('meditateBtn');
         if (medBtn && medBtn.offsetParent !== null) {
@@ -137,13 +140,38 @@
             if (!this.stats) { area.innerHTML = '<div class="tt-no-stats">暂无天赋加成</div>'; return; }
             const s = this.stats;
             let h = '<div class="tt-stats-grid">';
-            if (s.atkBonus > 0) h += `<div class="tt-stat-item"><span>⚔️ 攻击</span><span>+${Math.round(s.atkBonus)}%</span></div>`;
-            if (s.defBonus > 0) h += `<div class="tt-stat-item"><span>🛡️ 防御</span><span>+${Math.round(s.defBonus)}%</span></div>`;
-            if (s.hpBonus > 0) h += `<div class="tt-stat-item"><span>❤️ 生命</span><span>+${Math.round(s.hpBonus)}%</span></div>`;
-            if (s.mpBonus > 0) h += `<div class="tt-stat-item"><span>✨ 灵力</span><span>+${Math.round(s.mpBonus)}%</span></div>`;
-            if (s.critBonus > 0) h += `<div class="tt-stat-item"><span>💥 暴击</span><span>+${Math.round(s.critBonus)}%</span></div>`;
+            if (s.atkBonus > 0) h += `<div class="tt-stat-item"><span class="tt-stat-name">⚔️ 攻击</span><span class="tt-stat-value">+${Math.round(s.atkBonus)}%</span></div>`;
+            if (s.defBonus > 0) h += `<div class="tt-stat-item"><span class="tt-stat-name">🛡️ 防御</span><span class="tt-stat-value">+${Math.round(s.defBonus)}%</span></div>`;
+            if (s.hpBonus > 0) h += `<div class="tt-stat-item"><span class="tt-stat-name">❤️ 生命</span><span class="tt-stat-value">+${Math.round(s.hpBonus)}%</span></div>`;
+            if (s.mpBonus > 0) h += `<div class="tt-stat-item"><span class="tt-stat-name">✨ 灵力</span><span class="tt-stat-value">+${Math.round(s.mpBonus)}%</span></div>`;
+            if (s.critBonus > 0) h += `<div class="tt-stat-item"><span class="tt-stat-name">💥 暴击</span><span class="tt-stat-value">+${Math.round(s.critBonus)}%</span></div>`;
             h += '</div>';
+            let lh = '';
+            if (s.hasImmortal) lh += '<div class="tt-legend-stat"><span>✨ 不死</span><span>首次HP归零恢复20%HP</span></div>';
+            if (s.rootAmplify) lh += '<div class="tt-legend-stat"><span>🌿 灵根共鸣</span><span>灵根战斗特效强化</span></div>';
+            if (s.hasExecute) lh += '<div class="tt-legend-stat"><span>⚔️ 斩杀</span><span>敌人HP<20%伤害翻倍</span></div>';
+            if (s.hasAbsorb) lh += '<div class="tt-legend-stat"><span>🌀 天道汲取</span><span>击杀回复30%HP+30%MP</span></div>';
+            if (s.hasWrath) lh += '<div class="tt-legend-stat"><span>⚡ 天怒</span><span>攻击+30%</span></div>';
+            if (lh) h += '<div class="tt-legend-stats">' + lh + '</div>';
             area.innerHTML = h;
+
+            // ✅ 动态生成后应用当前主题
+            const container = document.getElementById('tt-auto-trial-container');
+            if (container && window._trialTheme) {
+                const isDark = window._trialTheme === 'dark';
+                area.querySelectorAll('.tt-stat-item').forEach(s => {
+                    s.style.background = isDark ? '#2A2A3E' : '#fff';
+                    const spans = s.querySelectorAll('span');
+                    if (spans[0]) spans[0].style.color = isDark ? '#BBB' : '#666';
+                    if (spans[1]) spans[1].style.color = isDark ? '#8C9EFF' : '#667eea';
+                });
+                area.querySelectorAll('.tt-legend-stat').forEach(s => {
+                    s.style.background = isDark ? '#4A3A00' : '#fff8e1';
+                    s.querySelectorAll('span').forEach(sp => sp.style.color = isDark ? '#FFD93D' : '#e67e22');
+                });
+                const noStats = area.querySelector('.tt-no-stats');
+                if (noStats) noStats.style.color = isDark ? '#888' : '#999';
+            }
         }
     };
 
@@ -198,64 +226,90 @@
     };
 
     // ============ CSS样式 ============
+    const CSS_VARS_LIGHT = `
+        --bg:#FFFFFF;
+        --bg-secondary:#F8F9FA;
+        --bg-card:#F8F9FA;
+        --text:#333;
+        --text-secondary:#888;
+        --border:#E8E8E8;
+        --border-light:#EFEFEF;
+        --accent:#667eea;
+        --danger:#E74C3C;
+        --success:#27AE60;
+        --warning:#F39C12;
+        --btn-primary:#1A1A1A;
+        --btn-primary-text:#FFFFFF;
+        --log-bg:#FFFFFF;
+        --log-text:#666;
+        --log-border:#F5F5F5;
+        --tag-bg:#F5F5F5;
+        --tag-text:#555;
+        --tag-legendary-bg:#FFF8E1;
+        --tag-legendary-text:#F39C12;
+        --tag-rare-bg:#E8F4FD;
+        --tag-rare-text:#4A90D9;
+    `;
+
     const PC_STYLES = `
-        #at-auto-trial-container{position:fixed;top:20px;right:20px;width:420px;background:#FFFFFF;border-radius:20px;box-shadow:0 4px 20px rgba(0,0,0,0.08);z-index:99999;font-family:"Microsoft YaHei",sans-serif;overflow:hidden;border:1px solid #E8E8E8;}
-        .at-header{background:#F8F9FA;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;cursor:move;user-select:none;border-bottom:1px solid #EEEEEE;}
-        .at-header h3{margin:0;font-size:16px;font-weight:600;color:#333;}
+        #at-auto-trial-container{${CSS_VARS_LIGHT}position:fixed;top:20px;right:20px;width:420px;background:var(--bg);border-radius:20px;box-shadow:0 4px 20px rgba(0,0,0,0.08);z-index:99999;font-family:"Microsoft YaHei",sans-serif;overflow:hidden;border:1px solid var(--border);}
+        #at-auto-trial-container:hover{box-shadow:0 8px 30px rgba(0,0,0,0.12);}
+        .at-header{background:var(--bg-secondary);padding:14px 20px;display:flex;justify-content:space-between;align-items:center;cursor:move;user-select:none;border-bottom:1px solid var(--border-light);}
+        .at-header h3{margin:0;font-size:16px;font-weight:600;color:var(--text);}
         .at-header-controls{display:flex;gap:6px;align-items:center;}
-        .at-btn-icon{width:28px;height:28px;border:none;border-radius:50%;background:#E0E0E0;color:#666;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all 0.2s;line-height:1;padding:0;}
-        .at-btn-icon:hover{background:#CCCCCC;color:#333;}
-        .at-body{padding:20px;background:#FFFFFF;max-height:70vh;overflow-y:auto;}
+        .at-btn-icon{width:28px;height:28px;border:none;border-radius:50%;background:var(--border);color:var(--text-secondary);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all 0.2s;line-height:1;padding:0;}
+        .at-btn-icon:hover{background:var(--text-secondary);color:var(--bg);}
+        .at-body{padding:20px;background:var(--bg);max-height:70vh;overflow-y:auto;}
         .at-body::-webkit-scrollbar{width:4px;}
         .at-body::-webkit-scrollbar-track{background:#F0F0F0;border-radius:4px;}
         .at-body::-webkit-scrollbar-thumb{background:#CCC;border-radius:4px;}
-        .at-card-section{background:#F8F9FA;border-radius:16px;padding:16px;margin-bottom:16px;border:1px solid #EFEFEF;}
-        .at-section-title{font-size:13px;font-weight:600;color:#888;margin-bottom:12px;display:flex;align-items:center;gap:6px;}
-        .at-select{width:100%;padding:10px 14px;border:1px solid #E5E5E5;border-radius:12px;background:#FFFFFF;font-size:13px;color:#333;outline:none;cursor:pointer;box-sizing:border-box;font-family:"Microsoft YaHei",sans-serif;}
-        .at-select:focus{border-color:#CCC;box-shadow:0 0 0 2px rgba(0,0,0,0.05);}
-        .at-input-full{width:100%;padding:10px 14px;border:1px solid #E5E5E5;border-radius:12px;background:#FFFFFF;font-size:13px;box-sizing:border-box;}
+        .at-card-section{background:var(--bg-card);border-radius:16px;padding:16px;margin-bottom:16px;border:1px solid var(--border-light);}
+        .at-section-title{font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:12px;display:flex;align-items:center;gap:6px;}
+        .at-select{width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:12px;background:var(--bg);font-size:13px;color:var(--text);outline:none;cursor:pointer;box-sizing:border-box;font-family:"Microsoft YaHei",sans-serif;}
+        .at-select:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(0,0,0,0.05);}
+        .at-input-full{width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:12px;background:var(--bg);font-size:13px;color:var(--text);box-sizing:border-box;}
         .at-checkbox-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
-        .at-checkbox-item{display:flex;align-items:center;gap:8px;font-size:12px;color:#555;cursor:pointer;padding:6px 0;}
-        .at-checkbox-item input{accent-color:#333;cursor:pointer;}
+        .at-checkbox-item{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-secondary);cursor:pointer;padding:6px 0;}
+        .at-checkbox-item input{accent-color:var(--accent);cursor:pointer;}
         .at-button-group{display:flex;gap:12px;margin:20px 0 16px;}
         .at-btn{flex:1;padding:12px 0;border:none;border-radius:40px;font-size:13px;font-weight:500;cursor:pointer;transition:all 0.2s;font-family:"Microsoft YaHei",sans-serif;}
-        .at-btn-primary{background:#1A1A1A;color:#FFFFFF;}
-        .at-btn-primary:hover:not(:disabled){background:#333;transform:translateY(-1px);}
-        .at-btn-primary:disabled{background:#E0E0E0;color:#999;cursor:not-allowed;transform:none;}
-        .at-btn-danger{background:#FFFFFF;color:#E74C3C;border:1px solid #FFCDD2;}
-        .at-btn-danger:hover:not(:disabled){background:#FFF5F5;border-color:#E74C3C;}
+        .at-btn-primary{background:var(--btn-primary);color:var(--btn-primary-text);}
+        .at-btn-primary:hover:not(:disabled){filter:brightness(1.2);transform:translateY(-1px);}
+        .at-btn-primary:disabled{background:#E0E0E0;color:#999;cursor:not-allowed;transform:none;filter:none;}
+        .at-btn-danger{background:var(--bg);color:var(--danger);border:1px solid #FFCDD2;}
+        .at-btn-danger:hover:not(:disabled){background:#FFF5F5;border-color:var(--danger);}
         .at-btn-danger:disabled{background:#F5F5F5;color:#CCC;border-color:#E0E0E0;cursor:not-allowed;}
         .at-status-bar{padding:10px 14px;border-radius:40px;font-size:12px;margin:12px 0;display:flex;align-items:center;gap:8px;font-weight:500;}
         .at-status-running{background:#E8F4FD;color:#4A90D9;}
-        .at-status-stopped{background:#F5F5F5;color:#888;}
-        .at-status-completed{background:#E8F5E9;color:#27AE60;}
-        .at-effect-panel{background:#F8F9FA;border-radius:16px;padding:14px;margin:16px 0;border:1px solid #EFEFEF;}
-        .at-effect-panel-title{font-size:11px;font-weight:600;color:#999;text-align:center;margin-bottom:10px;letter-spacing:1px;}
+        .at-status-stopped{background:var(--bg-secondary);color:var(--text-secondary);}
+        .at-status-completed{background:#E8F5E9;color:var(--success);}
+        .at-effect-panel{background:var(--bg-card);border-radius:16px;padding:14px;margin:16px 0;border:1px solid var(--border-light);}
+        .at-effect-panel-title{font-size:11px;font-weight:600;color:var(--text-secondary);text-align:center;margin-bottom:10px;letter-spacing:1px;}
         .at-effect-grid{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;}
-        .at-effect-item{font-size:11px;padding:4px 10px;background:#FFFFFF;border-radius:20px;color:#555;border:1px solid #E8E8E8;}
-        .at-effect-item-legendary{background:#FFF8E1;color:#F39C12;border-color:#FFE0A3;}
+        .at-effect-item{font-size:11px;padding:4px 10px;background:var(--bg);border-radius:20px;color:var(--tag-text);border:1px solid var(--border);}
+        .at-effect-item-legendary{background:var(--tag-legendary-bg);color:var(--tag-legendary-text);border-color:#FFE0A3;}
         .at-placeholder-text{font-size:11px;color:#BBB;text-align:center;display:block;}
-        .at-log-container{margin-top:12px;border-radius:16px;overflow:hidden;border:1px solid #EFEFEF;background:#FFFFFF;}
-        .at-log-tabs{display:flex;background:#F8F9FA;border-bottom:1px solid #EFEFEF;}
-        .at-log-tab{flex:1;padding:10px;text-align:center;font-size:12px;font-weight:500;cursor:pointer;color:#999;transition:all 0.2s;background:transparent;border:none;font-family:"Microsoft YaHei",sans-serif;}
-        .at-log-tab.at-active{color:#333;background:#FFFFFF;border-bottom:2px solid #333;}
-        .at-log-area{max-height:200px;overflow-y:auto;padding:12px;background:#FFFFFF;font-size:11px;line-height:1.5;}
+        .at-log-container{margin-top:12px;border-radius:16px;overflow:hidden;border:1px solid var(--border-light);background:var(--log-bg);}
+        .at-log-tabs{display:flex;background:var(--bg-secondary);border-bottom:1px solid var(--border-light);}
+        .at-log-tab{flex:1;padding:10px;text-align:center;font-size:12px;font-weight:500;cursor:pointer;color:var(--text-secondary);transition:all 0.2s;background:transparent;border:none;font-family:"Microsoft YaHei",sans-serif;}
+        .at-log-tab.at-active{color:var(--text);background:var(--log-bg);border-bottom:2px solid var(--accent);}
+        .at-log-area{max-height:200px;overflow-y:auto;padding:12px;background:var(--log-bg);font-size:11px;line-height:1.5;}
         .at-log-area::-webkit-scrollbar{width:4px;}
         .at-log-area::-webkit-scrollbar-track{background:#F0F0F0;}
         .at-log-area::-webkit-scrollbar-thumb{background:#CCC;}
-        .at-log-item{padding:6px 0;border-bottom:1px solid #F5F5F5;color:#666;font-family:'SF Mono',Monaco,monospace;font-size:10px;white-space:pre-wrap;word-break:break-all;}
+        .at-log-item{padding:6px 0;border-bottom:1px solid var(--log-border);color:var(--log-text);font-family:'SF Mono',Monaco,monospace;font-size:10px;white-space:pre-wrap;word-break:break-all;}
         .at-log-item:last-child{border-bottom:none;}
-        .at-stats-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid #F0F0F0;}
-        .at-stat-badge{font-size:10px;padding:3px 10px;background:#F5F5F5;border-radius:20px;color:#666;}
-        .at-stat-badge-legendary{background:#FFF8E1;color:#F39C12;}
-        .at-stat-badge-rare{background:#E8F4FD;color:#4A90D9;}
+        .at-stats-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border-light);}
+        .at-stat-badge{font-size:10px;padding:3px 10px;background:var(--tag-bg);border-radius:20px;color:var(--tag-text);}
+        .at-stat-badge-legendary{background:var(--tag-legendary-bg);color:var(--tag-legendary-text);}
+        .at-stat-badge-rare{background:var(--tag-rare-bg);color:var(--tag-rare-text);}
         .at-buff-wall{display:flex;flex-wrap:wrap;gap:8px;}
-        .at-buff-tag{font-size:11px;padding:4px 10px;background:#F5F5F5;border-radius:20px;color:#555;}
-        .at-buff-tag-legendary{background:#FFF8E1;color:#F39C12;}
-        .at-buff-tag-rare{background:#E8F4FD;color:#4A90D9;}
+        .at-buff-tag{font-size:11px;padding:4px 10px;background:var(--tag-bg);border-radius:20px;color:var(--tag-text);}
+        .at-buff-tag-legendary{background:var(--tag-legendary-bg);color:var(--tag-legendary-text);}
+        .at-buff-tag-rare{background:var(--tag-rare-bg);color:var(--tag-rare-text);}
         .at-empty-state{text-align:center;color:#BBB;padding:20px;font-size:11px;}
         .at-refresh-btn{text-align:right;margin-top:8px;}
-        .at-refresh-btn button{background:none;border:none;font-size:10px;color:#4A90D9;cursor:pointer;padding:2px 8px;border-radius:12px;transition:background 0.2s;}
+        .at-refresh-btn button{background:none;border:none;font-size:10px;color:var(--accent);cursor:pointer;padding:2px 8px;border-radius:12px;transition:background 0.2s;}
         .at-refresh-btn button:hover{background:#F0F7FF;}
         .at-toast{position:fixed;bottom:30%;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:#fff;padding:8px 18px;border-radius:20px;font-size:12px;z-index:100001;pointer-events:none;font-family:"Microsoft YaHei",sans-serif;animation:at-toast-fade 1.5s forwards;}
         @keyframes at-toast-fade{0%{opacity:1;transform:translateX(-50%) scale(1)}70%{opacity:1;transform:translateX(-50%) scale(1)}100%{opacity:0;transform:translateX(-50%) scale(0.9)}}
@@ -326,6 +380,58 @@
     });
     document.querySelectorAll('.tt-overlay').forEach(el => el.remove());
 
+    // ============ 主题管理 ============
+    function applyTheme(theme) {
+        window._trialTheme = theme;
+        const container = document.getElementById(isMobile ? 'tt-auto-trial-container' : 'at-auto-trial-container');
+        if (!container) return;
+        const isDark = theme === 'dark';
+        if (isMobile) {
+            container.style.background = isDark ? '#1E1E2E' : '#fff';
+            container.querySelectorAll('.tt-card').forEach(c => { c.style.background = isDark ? '#313145' : '#f8f9fa'; c.style.color = isDark ? '#E0E0E0' : '#333'; });
+            container.querySelectorAll('.tt-card-title').forEach(t => { t.style.color = isDark ? '#E0E0E0' : '#333'; t.style.borderLeftColor = isDark ? '#7C8EFF' : '#667eea'; });
+            container.querySelectorAll('.tt-select').forEach(s => { s.style.background = isDark ? '#2A2A3E' : '#fff'; s.style.color = isDark ? '#E0E0E0' : '#333'; s.style.borderColor = isDark ? '#444' : '#e0e0e0'; });
+            container.querySelectorAll('.tt-number-input').forEach(i => { i.style.background = isDark ? '#2A2A3E' : '#fff'; i.style.color = isDark ? '#E0E0E0' : '#333'; i.style.borderColor = isDark ? '#444' : '#e0e0e0'; });
+            const logEl = container.querySelector('.tt-log'); if (logEl) { logEl.style.background = isDark ? '#2A2A3E' : '#fff'; logEl.style.borderColor = isDark ? '#3A3A4E' : '#eee'; }
+            const buffEl = container.querySelector('.tt-buff-combo'); if (buffEl) buffEl.style.background = isDark ? '#2A2A3E' : '#f8f9fa';
+            
+            // ✅ 天赋加成卡片
+            container.querySelectorAll('.tt-stat-item').forEach(s => { 
+                s.style.background = isDark ? '#2A2A3E' : '#fff'; 
+                const spans = s.querySelectorAll('span');
+                if (spans[0]) spans[0].style.color = isDark ? '#BBB' : '#666';
+                if (spans[1]) spans[1].style.color = isDark ? '#8C9EFF' : '#667eea';
+            });
+            
+            // ✅ 传说天赋卡片
+            container.querySelectorAll('.tt-legend-stat').forEach(s => { 
+                s.style.background = isDark ? '#4A3A00' : '#fff8e1'; 
+                s.querySelectorAll('span').forEach(sp => sp.style.color = isDark ? '#FFD93D' : '#e67e22');
+            });
+            
+            // ✅ 天赋加成名称和数值
+            container.querySelectorAll('.tt-stat-name').forEach(s => { s.style.color = isDark ? '#BBB' : '#666'; });
+            container.querySelectorAll('.tt-stat-value').forEach(s => { s.style.color = isDark ? '#8C9EFF' : '#667eea'; });
+            
+            // ✅ 无加成文字
+            container.querySelectorAll('.tt-no-stats').forEach(s => { s.style.color = isDark ? '#888' : '#999'; });
+            
+            // ✅ 刷新按钮
+            container.querySelectorAll('.tt-refresh-btn button').forEach(b => { b.style.color = isDark ? '#8C9EFF' : '#667eea'; });
+            
+            container.querySelectorAll('.tt-switch-item>span').forEach(s => { s.style.color = isDark ? '#CCC' : '#555'; });
+            container.querySelectorAll('.tt-log-item').forEach(l => { l.style.color = isDark ? '#CCC' : '#666'; l.style.borderBottomColor = isDark ? '#3A3A4E' : '#f0f0f0'; });
+            const fBtn = document.getElementById('trial-floating-btn'); if (fBtn) fBtn.style.background = isDark ? 'linear-gradient(135deg, #5A6FD6, #6A4BA2)' : 'linear-gradient(135deg, #667eea, #764ba2)';
+        } else {
+            const vars = isDark ? {
+                '--bg':'#1E1E2E','--bg-secondary':'#2A2A3E','--bg-card':'#313145','--text':'#E0E0E0','--text-secondary':'#AAA','--border':'#444','--border-light':'#3A3A4E','--accent':'#7C8EFF','--danger':'#FF6B6B','--success':'#6BCB77','--warning':'#FFD93D','--btn-primary':'#7C8EFF','--btn-primary-text':'#fff','--log-bg':'#2A2A3E','--log-text':'#CCC','--log-border':'#3A3A4E','--tag-bg':'#3A3A4E','--tag-text':'#CCC','--tag-legendary-bg':'#4A3A00','--tag-legendary-text':'#FFD93D','--tag-rare-bg':'#1A2A3E','--tag-rare-text':'#7CB8FF'
+            } : {
+                '--bg':'#FFFFFF','--bg-secondary':'#F8F9FA','--bg-card':'#F8F9FA','--text':'#333','--text-secondary':'#888','--border':'#E8E8E8','--border-light':'#EFEFEF','--accent':'#667eea','--danger':'#E74C3C','--success':'#27AE60','--warning':'#F39C12','--btn-primary':'#1A1A1A','--btn-primary-text':'#FFFFFF','--log-bg':'#FFFFFF','--log-text':'#666','--log-border':'#F5F5F5','--tag-bg':'#F5F5F5','--tag-text':'#555','--tag-legendary-bg':'#FFF8E1','--tag-legendary-text':'#F39C12','--tag-rare-bg':'#E8F4FD','--tag-rare-text':'#4A90D9'
+            };
+            for (const [k, v] of Object.entries(vars)) container.style.setProperty(k, v);
+        }
+    }
+
     // ============ UI构建 ============
     const savedSettings = Storage.load() || Storage.getDefault();
     const highFloor = parseInt(localStorage.getItem('auto_trial_high_floor') || '0');
@@ -337,13 +443,20 @@
         container = document.createElement('div'); container.id = 'tt-auto-trial-container';
         container.innerHTML = `
             <div class="tt-drag-handle" id="tt-drag-handle"></div>
-            <div class="tt-header"><h3>⚔️ 自动试炼塔 v4.2.8</h3><button id="tt-minimize" style="background:rgba(255,255,255,0.25);border:none;color:#fff;font-size:16px;width:28px;height:28px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;">✕</button></div>
+            <div class="tt-header">
+                <h3>⚔️ 自动试炼塔 v4.2.9</h3>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <button id="tt-theme-toggle" style="background:rgba(255,255,255,0.25);border:none;color:#fff;font-size:16px;width:28px;height:28px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;">${savedSettings.theme==='dark'?'☀️':'🌙'}</button>
+                    <button id="tt-minimize" style="background:rgba(255,255,255,0.25);border:none;color:#fff;font-size:16px;width:28px;height:28px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;">✕</button>
+                </div>
+            </div>
             <div class="tt-content">
                 <div class="tt-card"><div class="tt-card-title">🎯 天赋策略</div><select class="tt-select" id="tt-strategy"><option value="balanced" ${savedSettings.strategy==='balanced'?'selected':''}>综合平衡（暴击优先）</option><option value="attack" ${savedSettings.strategy==='attack'?'selected':''}>攻击优先</option><option value="defense" ${savedSettings.strategy==='defense'?'selected':''}>防御优先</option><option value="legendary" ${savedSettings.strategy==='legendary'?'selected':''}>传说品质优先</option></select></div>
                 <div class="tt-card"><div class="tt-card-title">⚙️ 自动设置</div><div class="tt-switch-group">
                     <div class="tt-switch-item"><span>🔄 失败自动重试</span><label class="tt-switch"><input type="checkbox" id="tt-auto-retry" ${savedSettings.autoRetry?'checked':''}><span class="tt-switch-slider"></span></label></div>
                     <div class="tt-switch-item"><span>⚡ 跳过战斗动画</span><label class="tt-switch"><input type="checkbox" id="tt-skip-combat" ${savedSettings.skipCombat?'checked':''}><span class="tt-switch-slider"></span></label></div>
                     <div class="tt-switch-item"><span>💎 灵石刷新天赋</span><label class="tt-switch"><input type="checkbox" id="tt-refresh-gems" ${savedSettings.refreshWithGems?'checked':''}><span class="tt-switch-slider"></span></label></div>
+                    <div class="tt-switch-item"><span>🧘 自动冥想</span><label class="tt-switch"><input type="checkbox" id="tt-meditate-enabled" ${savedSettings.meditateEnabled?'checked':''}><span class="tt-switch-slider"></span></label></div>
                 </div></div>
                 <div class="tt-card"><div class="tt-card-title">🎯 目标层数 ${highFloor>0?`<span style="font-size:10px;color:#999;margin-left:auto;">最高: ${highFloor}层</span>`:''}</div><input type="number" class="tt-number-input" id="tt-target" value="${savedSettings.targetFloor}" min="0" max="999"></div>
                 <div class="tt-btn-group"><button class="tt-btn tt-btn-start" id="tt-start">▶ 开始挑战</button><button class="tt-btn tt-btn-stop" id="tt-stop" disabled>⏹ 停止</button></div>
@@ -355,13 +468,14 @@
     } else {
         container = document.createElement('div'); container.id = 'at-auto-trial-container';
         container.innerHTML = `
-            <div class="at-header" id="at-header"><h3>⚔️ 自动试炼塔 v4.2.8</h3><div class="at-header-controls"><button class="at-btn-icon" id="at-btn-minimize">−</button></div></div>
+            <div class="at-header" id="at-header"><h3>⚔️ 自动试炼塔 v4.2.9</h3><div class="at-header-controls"><button class="at-btn-icon" id="at-theme-toggle" title="切换主题">${savedSettings.theme==='dark'?'☀️':'🌙'}</button><button class="at-btn-icon" id="at-btn-minimize">−</button></div></div>
             <div class="at-body" id="at-body">
                 <div class="at-card-section"><div class="at-section-title">🎯 天赋策略</div><select class="at-select" id="at-strategy"><option value="balanced" ${savedSettings.strategy==='balanced'?'selected':''}>综合平衡（暴击优先）</option><option value="attack" ${savedSettings.strategy==='attack'?'selected':''}>攻击优先</option><option value="defense" ${savedSettings.strategy==='defense'?'selected':''}>防御优先</option><option value="legendary" ${savedSettings.strategy==='legendary'?'selected':''}>传说品质优先</option></select></div>
                 <div class="at-card-section"><div class="at-section-title">⚙️ 自动设置</div><div class="at-checkbox-grid">
                     <label class="at-checkbox-item"><input type="checkbox" id="at-auto-retry" ${savedSettings.autoRetry?'checked':''}> 失败自动重试</label>
                     <label class="at-checkbox-item"><input type="checkbox" id="at-skip-combat" ${savedSettings.skipCombat?'checked':''}> 跳过战斗动画</label>
                     <label class="at-checkbox-item"><input type="checkbox" id="at-refresh-gems" ${savedSettings.refreshWithGems?'checked':''}> 💎 灵石刷新</label>
+                    <label class="at-checkbox-item"><input type="checkbox" id="at-meditate-enabled" ${savedSettings.meditateEnabled?'checked':''}> 🧘 自动冥想</label>
                 </div></div>
                 <div class="at-card-section"><div class="at-section-title">🎯 目标层数 ${highFloor>0?`<span style="font-size:10px;color:#999;margin-left:auto;">最高: ${highFloor}层</span>`:''}</div><input type="number" class="at-input-full" id="at-target" value="${savedSettings.targetFloor}" min="0" max="999"></div>
                 <div class="at-effect-panel"><div class="at-effect-panel-title">—— 天赋加成 ——</div><div id="at-effect-panel-content"><span class="at-placeholder-text">— 暂无加成 —</span></div><div class="at-refresh-btn"><button id="at-refresh-stats">🔄 刷新数据</button></div></div>
@@ -409,13 +523,19 @@
             this.el.insertBefore(d, this.el.firstChild);
             if (this.el.children.length > 50) this.el.removeChild(this.el.lastChild);
         },
-        clear() { 
-            this.el.innerHTML = isMobile ? '<div class="tt-log-item">📋 日志已清空</div>' : '<div class="at-log-item">📋 日志已清空</div>'; 
-        }
+        clear() { this.el.innerHTML = isMobile ? '<div class="tt-log-item">📋 日志已清空</div>' : '<div class="at-log-item">📋 日志已清空</div>'; }
     };
 
     const state = { running: false, currentFloor: 0, totalFights: 0, totalDeaths: 0, trialCount: 0 };
-    const IDS = isMobile ? { strategy:'tt-strategy', autoRetry:'tt-auto-retry', skipCombat:'tt-skip-combat', refreshGems:'tt-refresh-gems', target:'tt-target', start:'tt-start', stop:'tt-stop', refresh:'tt-refresh-stats' } : { strategy:'at-strategy', autoRetry:'at-auto-retry', skipCombat:'at-skip-combat', refreshGems:'at-refresh-gems', target:'at-target', start:'at-start', stop:'at-stop', refresh:'at-refresh-stats' };
+    const IDS = isMobile ? { 
+        strategy:'tt-strategy', autoRetry:'tt-auto-retry', skipCombat:'tt-skip-combat', 
+        refreshGems:'tt-refresh-gems', meditateEnabled:'tt-meditate-enabled',
+        target:'tt-target', start:'tt-start', stop:'tt-stop', refresh:'tt-refresh-stats' 
+    } : { 
+        strategy:'at-strategy', autoRetry:'at-auto-retry', skipCombat:'at-skip-combat', 
+        refreshGems:'at-refresh-gems', meditateEnabled:'at-meditate-enabled',
+        target:'at-target', start:'at-start', stop:'at-stop', refresh:'at-refresh-stats' 
+    };
     function G(k) { return document.getElementById(IDS[k]); }
 
     const strategies = {
@@ -428,27 +548,12 @@
     function isCritBuff(b) { return /暴击|会心|致命|必杀|crit/i.test((b.desc||b.name||'').toLowerCase()); }
     function isCritSatisfied() { return EffectTracker.getCritBonus() >= 100; }
 
-    function getBuffDesc(buff) {
-        if (buff.desc) return buff.desc;
-        if (buff.effect) return buff.effect;
-        return '';
-    }
-
-    function formatBuffList(buffs) {
-        if (!buffs?.length) return '无';
-        return buffs.map(b => {
-            const desc = getBuffDesc(b);
-            const mark = b.rarity === '传说' ? '★' : (b.rarity === '稀有' ? '◆' : '·');
-            const descPart = desc ? ` ${desc}` : '';
-            return `  ${mark}[${b.name}]${descPart}`;
-        }).join('\n');
-    }
+    function getBuffDesc(buff) { if (buff.desc) return buff.desc; if (buff.effect) return buff.effect; return ''; }
+    function formatBuffList(buffs) { if (!buffs?.length) return '无'; return buffs.map(b => { const desc = getBuffDesc(b); const mark = b.rarity === '传说' ? '★' : (b.rarity === '稀有' ? '◆' : '·'); return `  ${mark}[${b.name}]${desc ? ' ' + desc : ''}`; }).join('\n'); }
 
     function chooseBestBuff(buffs) {
         if (!buffs?.length) return null;
-        
         log.add('📋 可选天赋:\n' + formatBuffList(buffs), 'buff');
-        
         if (!isCritSatisfied()) {
             const cb = buffs.find(b => isCritBuff(b));
             if (cb) {
@@ -457,166 +562,45 @@
                 return cb;
             }
         }
-        
-        const w = getWeights();
-        let best = buffs[0], bestScore = 0;
+        const w = getWeights(); let best = buffs[0], bestScore = 0;
         buffs.forEach(b => {
             let s = 0;
-            if (b.rarity==='传说') s+=w.leg;
-            else if (b.rarity==='稀有') s+=w.rare;
-            else s+=w.com;
-            const d=(b.desc||b.name||'').toLowerCase();
-            if (isCritBuff(b)) s+=w.crit;
-            if (/攻击|天怒/.test(d)) s+=w.atk;
-            if (/防御/.test(d)) s+=w.def;
-            if (/生命/.test(d)) s+=w.hp;
-            if (/灵力/.test(d)) s+=w.mp;
-            if (/不死/.test(d)) s+=8;
-            if (/斩杀/.test(d)) s+=7;
-            if (/汲取|天道/.test(d)) s+=7;
-            if (/灵根/.test(d)) s+=8;
-            if (s>bestScore){bestScore=s;best=b;}
+            if (b.rarity === '传说') s += w.leg;
+            else if (b.rarity === '稀有') s += w.rare;
+            else s += w.com;
+            const d = (b.desc || b.name || '').toLowerCase();
+            if (isCritBuff(b)) s += isCritSatisfied() ? 1 : w.crit;
+            if (/攻击|天怒/.test(d)) s += w.atk;
+            if (/防御/.test(d)) s += w.def;
+            if (/生命/.test(d)) s += w.hp;
+            if (/灵力/.test(d)) s += w.mp;
+            if (/不死/.test(d)) s += 8;
+            if (/斩杀/.test(d)) s += 7;
+            if (/汲取|天道/.test(d)) s += 7;
+            if (/灵根/.test(d)) s += 8;
+            if (s > bestScore) { bestScore = s; best = b; }
         });
-        
-        log.add(`⭐ 选择: [${best.name}] ${getBuffDesc(best)} (${best.rarity})`, 'buff');
+        const critNote = isCritBuff(best) && isCritSatisfied() ? ' (暴击已满·降权)' : '';
+        log.add(`⭐ 选择: [${best.name}] ${getBuffDesc(best)} (${best.rarity}${critNote})`, 'buff');
         BuffTracker.add(best.name, best.rarity, state.currentFloor);
         return best;
     }
 
     async function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-    async function apiCall(method, url, data) {
-        try {
-            if (typeof api !== 'undefined') {
-                if (typeof api.post === 'function') return method==='get' ? await api.get(url) : await api.post(url, data);
-                if (typeof api.request === 'function') return method==='get' ? await api.request('get', url) : await api.request('post', url, data);
-            }
-            const t = localStorage.getItem('token');
-            const o = { method: method.toUpperCase(), headers: { 'Content-Type': 'application/json' }, credentials: 'include' };
-            if (t) o.headers['Authorization'] = 'Bearer ' + t;
-            if (data) o.body = JSON.stringify(data);
-            return await (await fetch(url, o)).json();
-        } catch(e) { log.add('API错误', 'error'); return null; }
-    }
-
-    async function getTrialInfo() {
-        const res = await apiCall('get', '/api/trial-tower/info');
-        if (res?.code === 200 && res.data) {
-            if (res.data.trialStats) EffectTracker.updateFromServer(res.data.trialStats);
-            const hf = parseInt(localStorage.getItem('auto_trial_high_floor')||'0');
-            if (res.data.bestFloor !== undefined && res.data.bestFloor > hf) localStorage.setItem('auto_trial_high_floor', res.data.bestFloor.toString());
-            return res.data;
-        }
-        return null;
-    }
-
-    async function refreshBuffsWithGems() {
-        const infoBefore = await getTrialInfo();
-        const beforeBuffs = infoBefore?.pendingBuffs || [];
-        
-        log.add('💎 使用灵石刷新天赋...', 'gems');
-        if (beforeBuffs.length > 0) {
-            log.add('📋 刷新前:\n' + formatBuffList(beforeBuffs), 'gems');
-        }
-        
-        const res = await apiCall('post', '/api/trial-tower/refresh-buff', { useGems: true });
-        if (res?.code === 200 && res.data?.success) {
-            const infoAfter = await getTrialInfo();
-            const afterBuffs = infoAfter?.pendingBuffs || [];
-            
-            log.add('💎 刷新成功 (消耗1000灵石)', 'success');
-            if (afterBuffs.length > 0) {
-                log.add('📋 刷新后:\n' + formatBuffList(afterBuffs), 'success');
-            }
-            showToast('💎 天赋已刷新');
-            await getTrialInfo();
-            return true;
-        }
-        log.add('⚠️ 刷新失败（灵石不足或不可用）', 'error');
-        return false;
-    }
-
-    async function selectBuffWithRefresh() {
-        const info = await getTrialInfo();
-        if (!info?.pendingBuffs?.length) return false;
-        
-        if (G('refreshGems').checked && !info.pendingBuffs.some(b => b.rarity==='传说')) {
-            if (isCritSatisfied() || !info.pendingBuffs.some(b => isCritBuff(b))) {
-                log.add('💎 天赋不理想，尝试刷新...', 'gems');
-                if (await refreshBuffsWithGems()) {
-                    const ni = await getTrialInfo();
-                    if (ni?.pendingBuffs?.length) {
-                        const bb = chooseBestBuff(ni.pendingBuffs);
-                        if (bb) { await apiCall('post', '/api/trial-tower/choose-buff', { buffId: bb.id }); await getTrialInfo(); return true; }
-                    }
-                }
-                log.add('刷新失败，使用当前天赋', 'info');
-            }
-        }
-        
-        const bb = chooseBestBuff(info.pendingBuffs);
-        if (!bb) return false;
-        await apiCall('post', '/api/trial-tower/choose-buff', { buffId: bb.id });
-        await getTrialInfo();
-        return true;
-    }
-
-    // ✅ 修复：startTrial 不清除天赋组合（仅在新一轮试炼时清除）
-    async function startTrial(isRetry = false) {
-        const info = await getTrialInfo();
-        if (!info) return false;
-        if (info.hasActiveTrial) {
-            state.currentFloor = info.activeFloor;
-            // ✅ 从服务器恢复当前天赋组合
-            if (info.activeBuffs?.length && BuffTracker.buffs.length === 0) {
-                for (const bn of info.activeBuffs) {
-                    let r = '普通';
-                    const nameStr = typeof bn === 'string' ? bn : (bn.name || bn);
-                    if (/不死|斩杀|汲取|灵根|天怒|天道/.test(nameStr)) r = '传说';
-                    else if (/强化|增幅|进阶|精通/.test(nameStr)) r = '稀有';
-                    BuffTracker.add(nameStr.replace(/[★✦⭐💠]/g, '').trim(), r, '?');
-                }
-            }
-            ensureStartMeditate();
-            return true;
-        }
-        // ✅ 只在真正开始新一轮试炼时清除
-        state.trialCount++;
-        if (state.trialCount > 1 || isRetry) {
-            BuffTracker.clear();
-        }
-        log.add(`开始第${state.trialCount}轮试炼`, 'success');
-        const res = await apiCall('post', '/api/trial-tower/start', { useAdPoints: false });
-        if (res?.code === 200) { await getTrialInfo(); ensureStartMeditate(); return true; }
-        if (G('autoRetry').checked) { 
-            const rr = await apiCall('post', '/api/trial-tower/start', { useAdPoints: false }); 
-            if (rr?.code === 200) { await getTrialInfo(); ensureStartMeditate(); return true; } 
-        }
-        log.add('无法开始试炼', 'error'); return false;
-    }
-
-    async function fightBoss() {
-        const res = await apiCall('post', '/api/trial-tower/fight');
-        if (res?.code !== 200) return null;
-        state.totalFights++; const d = res.data;
-        if (d.trialStats) EffectTracker.updateFromServer(d.trialStats);
-        if (d.logs?.length) log.add(`第${d.floor||'?'}层: ${d.logs[d.logs.length-1].substring(0,40)}`);
-        return d;
-    }
-
-    function updateStatus(msg, type = 'running') {
-        const sb = document.getElementById('at-status-box') || document.getElementById('tt-status-box');
-        const st = document.getElementById('at-status-text') || document.getElementById('tt-status-text');
-        const colors = { running: ['#f0f4ff', '#667eea'], stopped: ['#f5f5f5', '#888'], completed: ['#f0fff4', '#27ae60'] };
-        if (sb && st && colors[type]) { sb.style.background = colors[type][0]; sb.style.color = colors[type][1]; st.textContent = `${type==='running'?'🔄':type==='stopped'?'⏸':'✅'} ${msg}`; }
-        if (isMobile && fBtn) { state.running ? fBtn.classList.add('tt-running') : fBtn.classList.remove('tt-running'); }
-    }
+    async function apiCall(m, u, d) { try { if(typeof api!=='undefined'){if(typeof api.post==='function')return m==='get'?await api.get(u):await api.post(u,d);if(typeof api.request==='function')return m==='get'?await api.request('get',u):await api.request('post',u,d);} const t=localStorage.getItem('token');const o={method:m.toUpperCase(),headers:{'Content-Type':'application/json'},credentials:'include'};if(t)o.headers['Authorization']='Bearer '+t;if(d)o.body=JSON.stringify(d);return await(await fetch(u,o)).json(); } catch(e) { log.add('API错误','error');return null; } }
+    async function getTrialInfo() { const r=await apiCall('get','/api/trial-tower/info');if(r?.code===200&&r.data){if(r.data.trialStats)EffectTracker.updateFromServer(r.data.trialStats);const hf=parseInt(localStorage.getItem('auto_trial_high_floor')||'0');if(r.data.bestFloor!==undefined&&r.data.bestFloor>hf)localStorage.setItem('auto_trial_high_floor',r.data.bestFloor.toString());return r.data;}return null; }
+    async function refreshBuffsWithGems() { const ib=await getTrialInfo();const bb=ib?.pendingBuffs||[];log.add('💎 使用灵石刷新...','gems');if(bb.length>0)log.add('📋 刷新前:\n'+formatBuffList(bb),'gems');const r=await apiCall('post','/api/trial-tower/refresh-buff',{useGems:true});if(r?.code===200&&r.data?.success){const ia=await getTrialInfo();const ab=ia?.pendingBuffs||[];log.add('💎 刷新成功','success');if(ab.length>0)log.add('📋 刷新后:\n'+formatBuffList(ab),'success');showToast('💎 天赋已刷新');await getTrialInfo();return true;}log.add('⚠️ 刷新失败','error');return false; }
+    async function selectBuffWithRefresh() { const i=await getTrialInfo();if(!i?.pendingBuffs?.length)return false;if(G('refreshGems').checked&&!i.pendingBuffs.some(b=>b.rarity==='传说')){if(isCritSatisfied()||!i.pendingBuffs.some(b=>isCritBuff(b))){log.add('💎 尝试刷新...','gems');if(await refreshBuffsWithGems()){const ni=await getTrialInfo();if(ni?.pendingBuffs?.length){const bb=chooseBestBuff(ni.pendingBuffs);if(bb){await apiCall('post','/api/trial-tower/choose-buff',{buffId:bb.id});await getTrialInfo();return true;}}}log.add('使用当前天赋','info');}}const bb=chooseBestBuff(i.pendingBuffs);if(!bb)return false;await apiCall('post','/api/trial-tower/choose-buff',{buffId:bb.id});await getTrialInfo();return true; }
+    async function startTrial(isRetry=false) { const i=await getTrialInfo();if(!i)return false;if(i.hasActiveTrial){state.currentFloor=i.activeFloor;if(i.activeBuffs?.length&&BuffTracker.buffs.length===0){for(const bn of i.activeBuffs){let r='普通';const ns=typeof bn==='string'?bn:(bn.name||bn);if(/不死|斩杀|汲取|灵根|天怒|天道/.test(ns))r='传说';else if(/强化|增幅|进阶|精通/.test(ns))r='稀有';BuffTracker.add(ns.replace(/[★✦⭐💠]/g,'').trim(),r,'?');}}ensureStartMeditate();return true;}state.trialCount++;if(state.trialCount>1||isRetry)BuffTracker.clear();log.add(`开始第${state.trialCount}轮试炼`,'success');const r=await apiCall('post','/api/trial-tower/start',{useAdPoints:false});if(r?.code===200){await getTrialInfo();ensureStartMeditate();return true;}if(G('autoRetry').checked){const rr=await apiCall('post','/api/trial-tower/start',{useAdPoints:false});if(rr?.code===200){await getTrialInfo();ensureStartMeditate();return true;}}log.add('无法开始试炼','error');return false; }
+    async function fightBoss() { const r=await apiCall('post','/api/trial-tower/fight');if(r?.code!==200)return null;state.totalFights++;const d=r.data;if(d.trialStats)EffectTracker.updateFromServer(d.trialStats);if(d.logs?.length)log.add(`第${d.floor||'?'}层: ${d.logs[d.logs.length-1].substring(0,40)}`);return d; }
+    function updateStatus(msg,type='running'){const sb=document.getElementById('at-status-box')||document.getElementById('tt-status-box');const st=document.getElementById('at-status-text')||document.getElementById('tt-status-text');const colors={running:['#f0f4ff','#667eea'],stopped:['#f5f5f5','#888'],completed:['#f0fff4','#27ae60']};if(sb&&st&&colors[type]){sb.style.background=colors[type][0];sb.style.color=colors[type][1];st.textContent=`${type==='running'?'🔄':type==='stopped'?'⏸':'✅'} ${msg}`;}if(isMobile&&fBtn){state.running?fBtn.classList.add('tt-running'):fBtn.classList.remove('tt-running');}}
 
     async function runAutoTrial() {
         if (!state.running) return;
         const target = parseInt(G('target').value) || 0;
         try {
             updateStatus('启动中...', 'running');
+            await ensureStopMeditate();
             if (!await startTrial()) { stopAutoTrial(false); return; }
             let info = await getTrialInfo();
             if (!info) { stopAutoTrial(false); return; }
@@ -630,27 +614,10 @@
                 if (!result) { await wait(2000); continue; }
                 if (result.victory) {
                     state.currentFloor = result.floor || state.currentFloor + 1;
-                    if (result.buffs?.length) {
-                        log.add('🎁 获得天赋:\n' + formatBuffList(result.buffs), 'buff');
-                        await wait(500);
-                        const nfo = await getTrialInfo();
-                        if (nfo?.pendingBuffs?.length) await selectBuffWithRefresh();
-                        else {
-                            const bb = chooseBestBuff(result.buffs);
-                            await apiCall('post', '/api/trial-tower/choose-buff', { buffId: bb.id });
-                            await getTrialInfo();
-                        }
-                        await wait(300);
-                    }
+                    if (result.buffs?.length) { log.add('🎁 获得天赋:\n' + formatBuffList(result.buffs), 'buff'); await wait(500); const nfo = await getTrialInfo(); if (nfo?.pendingBuffs?.length) await selectBuffWithRefresh(); else { const bb = chooseBestBuff(result.buffs); await apiCall('post', '/api/trial-tower/choose-buff', { buffId: bb.id }); await getTrialInfo(); } await wait(300); }
                 } else {
                     state.totalDeaths++; log.add(`第${state.currentFloor+1}层失败`, 'error');
-                    if (G('autoRetry').checked) { 
-                        await wait(1500); await ensureStopMeditate(); 
-                        if (!state.running) return; 
-                        BuffTracker.clear(); 
-                        if (!await startTrial(true)) { stopAutoTrial(false); return; } 
-                        state.currentFloor = 0; 
-                    }
+                    if (G('autoRetry').checked) { await wait(1500); await ensureStopMeditate(); if (!state.running) return; BuffTracker.clear(); if (!await startTrial(true)) { stopAutoTrial(false); return; } state.currentFloor = 0; }
                     else { updateStatus(`失败于第${state.currentFloor+1}层`, 'stopped'); stopAutoTrial(false); return; }
                 }
                 await wait(800);
@@ -663,33 +630,33 @@
         ensureStopMeditate().then(() => {
             state.running = true; state.totalFights = 0; state.totalDeaths = 0;
             G('start').disabled = true; G('stop').disabled = false;
-            updateStatus('准备中...', 'running'); 
-            log.clear(); 
-            log.add('🚀 自动战斗启动', 'success');
+            updateStatus('准备中...', 'running'); log.clear(); log.add('🚀 自动战斗启动', 'success');
             if (window.GameSettings && G('skipCombat')) window.GameSettings.skipCombat = G('skipCombat').checked;
-            saveSettings(); showToast('🚀 自动挑战'); 
-            runAutoTrial();
+            saveSettings(); showToast('🚀 自动挑战'); runAutoTrial();
         }).catch(() => { log.add('启动失败', 'error'); });
     }
 
-    // ✅ 修复：停止时不丢失天赋组合
     function stopAutoTrial(completed) {
-        state.running = false; 
-        G('start').disabled = false; 
-        G('stop').disabled = true;
+        state.running = false; G('start').disabled = false; G('stop').disabled = true;
         if (state.totalFights > 0 && !completed) log.add(`📊 战斗${state.totalFights}次 抵达${state.currentFloor}层`);
-        if (!completed) { 
-            const s = BuffTracker.getSummary(); 
-            if (s.total > 0) log.add(`🏆 当前天赋: ★${s.legendary} ◆${s.rare} ·${s.common}`, 'success'); 
-        }
-        updateStatus('就绪', 'stopped'); 
-        ensureStartMeditate(); 
-        // ✅ 恢复服务器数据但不清理本地天赋
-        setTimeout(() => getTrialInfo(), 500);
+        if (!completed) { const s = BuffTracker.getSummary(); if (s.total > 0) log.add(`🏆 当前天赋: ★${s.legendary} ◆${s.rare} ·${s.common}`, 'success'); }
+        updateStatus('就绪', 'stopped'); ensureStartMeditate(); setTimeout(() => getTrialInfo(), 500);
     }
 
     function saveSettings() {
-        Storage.save({ strategy: G('strategy').value, autoRetry: G('autoRetry').checked, skipCombat: G('skipCombat').checked, refreshWithGems: G('refreshGems').checked, targetFloor: parseInt(G('target').value)||0, btnPos: savedSettings.btnPos });
+        Storage.save({ strategy: G('strategy').value, autoRetry: G('autoRetry').checked, skipCombat: G('skipCombat').checked, refreshWithGems: G('refreshGems').checked, meditateEnabled: G('meditateEnabled').checked, theme: savedSettings.theme, targetFloor: parseInt(G('target').value)||0, btnPos: savedSettings.btnPos });
+    }
+
+    // ============ 主题切换 ============
+    function toggleTheme() {
+        savedSettings.theme = savedSettings.theme === 'dark' ? 'light' : 'dark';
+        applyTheme(savedSettings.theme);
+        const pcBtn = document.getElementById('at-theme-toggle');
+        const mobileBtn = document.getElementById('tt-theme-toggle');
+        if (pcBtn) pcBtn.textContent = savedSettings.theme === 'dark' ? '☀️' : '🌙';
+        if (mobileBtn) mobileBtn.textContent = savedSettings.theme === 'dark' ? '☀️' : '🌙';
+        saveSettings();
+        showToast(savedSettings.theme === 'dark' ? '🌙 夜间模式' : '☀️ 日间模式');
     }
 
     // ============ 事件绑定 ============
@@ -700,8 +667,19 @@
     Object.values(IDS).forEach(id => { const el = document.getElementById(id); if (el) { el.addEventListener('change', saveSettings); if (el.type === 'checkbox') el.addEventListener('click', saveSettings); } });
     document.addEventListener('keydown', e => { if (e.ctrlKey && e.key === 't') { e.preventDefault(); state.running ? stopAutoTrial(false) : startAutoTrial(); } });
 
-    window.AutoTrial = { start: startAutoTrial, stop: () => stopAutoTrial(false), refreshData: getTrialInfo, getState: () => ({ running: state.running, floor: state.currentFloor }) };
-    if (typeof GM_registerMenuCommand !== 'undefined') { GM_registerMenuCommand('▶ 开始', startAutoTrial); GM_registerMenuCommand('⏹ 停止', () => stopAutoTrial(false)); GM_registerMenuCommand('🔄 刷新', getTrialInfo); }
+    const pcThemeBtn = document.getElementById('at-theme-toggle');
+    const mobileThemeBtn = document.getElementById('tt-theme-toggle');
+    if (pcThemeBtn) { pcThemeBtn.addEventListener('click', toggleTheme); pcThemeBtn.title = '切换主题'; }
+    if (mobileThemeBtn) { mobileThemeBtn.addEventListener('click', toggleTheme); }
 
-    (async () => { await getTrialInfo(); console.log('✅ v4.2.8 已加载（修复天赋丢失）'); updateStatus('就绪', 'stopped'); })();
+    window.AutoTrial = { start: startAutoTrial, stop: () => stopAutoTrial(false), refreshData: getTrialInfo, toggleTheme, getState: () => ({ running: state.running, floor: state.currentFloor }) };
+    if (typeof GM_registerMenuCommand !== 'undefined') { GM_registerMenuCommand('▶ 开始', startAutoTrial); GM_registerMenuCommand('⏹ 停止', () => stopAutoTrial(false)); GM_registerMenuCommand('🔄 刷新', getTrialInfo); GM_registerMenuCommand('🌓 切换主题', toggleTheme); }
+
+    // ============ 初始化 ============
+    (async () => {
+        applyTheme(savedSettings.theme || 'light');
+        await getTrialInfo();
+        console.log('✅ v4.2.9 已加载（主题全适配+暴击满后降权+冥想开关）');
+        updateStatus('就绪', 'stopped');
+    })();
 })();
