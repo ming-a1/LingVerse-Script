@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         天道试炼塔自动挑战助手
-// @namespace    https://viayoo.com/trial-tower
+// @namespace    ling-trial-tower-assistant
 // @version      4.2.4
 // @description  PC+移动端自动挑战天道试炼塔，事件驱动冥想控制、暴击优先、灵石刷新（修复移动端按钮）
 // @author       AutoTrial
@@ -11,6 +11,8 @@
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
 // @run-at       document-end
+// @downloadURL  https://raw.githubusercontent.com/ming-a1/LingVerse-Script/refs/heads/main/ling-trial-tower-assistant.js
+// @updateURL    https://raw.githubusercontent.com/ming-a1/LingVerse-Script/refs/heads/main/ling-trial-tower-assistant.js
 // ==/UserScript==
 
 (function() {
@@ -374,18 +376,15 @@
     let container, fBtn, overlay;
 
     if (isMobile) {
-        // 移动端：遮罩层
         overlay = document.createElement('div');
         overlay.className = 'tt-overlay';
         document.body.appendChild(overlay);
 
-        // 移动端：浮动按钮
         fBtn = document.createElement('div');
         fBtn.id = 'trial-floating-btn';
         fBtn.innerHTML = '<span>⚔️</span>';
         document.body.appendChild(fBtn);
 
-        // 移动端：底部面板
         container = document.createElement('div');
         container.id = 'tt-auto-trial-container';
         container.innerHTML = `
@@ -406,7 +405,6 @@
                 <div class="tt-card"><div class="tt-card-title">📋 战斗日志</div><div class="tt-log" id="tt-log"><div class="tt-log-item">📋 等待指令...</div></div></div>
             </div>`;
     } else {
-        // PC端：固定面板
         container = document.createElement('div');
         container.id = 'at-auto-trial-container';
         container.innerHTML = `
@@ -487,14 +485,12 @@
             Storage.save(savedSettings);
             
             if (!ds.mv) {
-                // 点击按钮：切换面板显示
                 container.classList.toggle('tt-open');
                 overlay.classList.toggle('tt-show');
             }
             ds.mv = false;
         });
 
-        // 关闭面板
         overlay.addEventListener('click', () => {
             container.classList.remove('tt-open');
             overlay.classList.remove('tt-show');
@@ -505,7 +501,6 @@
             overlay.classList.remove('tt-show');
         });
 
-        // 下拉关闭
         let sy = 0;
         document.getElementById('tt-drag-handle').addEventListener('touchstart', e => { sy = e.touches[0].clientY; });
         document.getElementById('tt-drag-handle').addEventListener('touchmove', e => {
@@ -544,7 +539,6 @@
             this.textContent = minimized ? '+' : '−';
         });
 
-        // 日志标签切换
         document.querySelectorAll('.at-log-tab').forEach(tab => {
             tab.addEventListener('click', function() {
                 document.querySelectorAll('.at-log-tab').forEach(t => t.classList.remove('at-active'));
