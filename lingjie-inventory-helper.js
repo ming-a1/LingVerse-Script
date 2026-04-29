@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         灵界储物助手
 // @namespace    https://github.com/yourname/lingjie-inventory-helper
-// @version      4.0
-// @description  手机版储物出售工具 - 修复刷新后关闭背包
+// @version      4.1
+// @description  手机版储物出售工具 - 货币灵石不计入不可售
 // @author       You
 // @run-at       document-end
 // @match        https://ling.muge.info/*
@@ -21,7 +21,7 @@
 
     var NS = 'lh-ns';
     var _sellItemFn = null;
-    var _lastInventoryBtn = null; // ✅ 记住打开背包时用的按钮
+    var _lastInventoryBtn = null;
 
     // ========== CSS ==========
     var styleEl = document.createElement('style');
@@ -47,9 +47,11 @@
         '#'+NS+'-panel .'+NS+'-text-green{color:#4ade80}',
         '#'+NS+'-panel .'+NS+'-text-red{color:#e05050}',
         '#'+NS+'-panel .'+NS+'-text-warn{color:#e0a040}',
+        '#'+NS+'-panel .'+NS+'-text-dim{color:#888}',
         '#'+NS+'-panel .'+NS+'-item{display:flex;align-items:center;justify-content:space-between;padding:12px;margin-bottom:6px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px}',
         '#'+NS+'-panel .'+NS+'-item--sellable:active{background:rgba(255,255,255,0.08)}',
         '#'+NS+'-panel .'+NS+'-item--unsellable{opacity:0.7}',
+        '#'+NS+'-panel .'+NS+'-item--currency{opacity:0.5;border-style:dashed}',
         '#'+NS+'-panel .'+NS+'-item-info{flex:1;min-width:0;margin-right:10px;display:block}',
         '#'+NS+'-panel .'+NS+'-item-name{font-weight:bold;font-size:15px;margin-bottom:3px;word-break:break-all;display:block}',
         '#'+NS+'-panel .'+NS+'-item-meta{font-size:12px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}',
@@ -59,11 +61,13 @@
         '#'+NS+'-panel .'+NS+'-tag--locked{color:#e0a040;border:1px solid #e0a040}',
         '#'+NS+'-panel .'+NS+'-tag--natal{color:#c792ea;border:1px solid #c792ea}',
         '#'+NS+'-panel .'+NS+'-tag--bound{color:#ff8a65;border:1px solid #ff8a65}',
+        '#'+NS+'-panel .'+NS+'-tag--currency{color:#fbbf24;border:1px solid #fbbf24}',
         '#'+NS+'-panel .'+NS+'-sell-btn{padding:10px 18px;border-radius:8px;font-size:14px;font-weight:bold;border:2px solid transparent;color:#fff;white-space:nowrap;flex-shrink:0;cursor:pointer;display:flex;align-items:center;justify-content:center;text-align:center;min-width:64px;transition:all 0.15s}',
         '#'+NS+'-panel .'+NS+'-sell-btn:active{transform:scale(0.94)}',
         '#'+NS+'-panel .'+NS+'-sell-btn--sell{background:#166534;border-color:#4ade80;box-shadow:0 0 8px rgba(74,222,128,0.3)}',
         '#'+NS+'-panel .'+NS+'-sell-btn--low{background:#9a3412;border-color:#f97316;box-shadow:0 0 8px rgba(249,115,22,0.3)}',
         '#'+NS+'-panel .'+NS+'-sell-btn--no{background:#7f1d1d;border-color:#ef4444;opacity:0.6}',
+        '#'+NS+'-panel .'+NS+'-sell-btn--currency{background:rgba(251,191,36,0.15);border-color:#fbbf24;color:#fbbf24;opacity:0.6}',
         '#'+NS+'-panel .'+NS+'-empty{text-align:center;color:#999;padding:40px 20px;display:block}',
         '#'+NS+'-panel .'+NS+'-notfound{text-align:center;color:#999;padding:30px;display:block}',
         '#'+NS+'-panel .'+NS+'-btn{display:inline-flex;align-items:center;justify-content:center;padding:10px 20px;border-radius:10px;font-size:14px;font-weight:bold;cursor:pointer;border:1px solid #c9983a;background:rgba(201,153,58,0.15);color:#c9983a;margin:4px}',
@@ -77,24 +81,21 @@
     function openInventory() {
         console.log('[储物助手] 打开背包...');
         _lastInventoryBtn = null;
-
         var selectors = [
             '[onclick*="inventory"]', '[onclick*="bag"]', '[onclick*="storage"]',
             '[onclick*="openInventory"]', '[onclick*="openBag"]', '[onclick*="showInventory"]',
             '.inventory-btn', '.bag-btn', '.storage-btn',
             '#inventory-btn', '#bag-btn', '[data-action="inventory"]', '[data-action="bag"]',
         ];
-
         for (var i = 0; i < selectors.length; i++) {
             var btn = document.querySelector(selectors[i]);
             if (btn && btn.offsetParent !== null) {
                 console.log('[储物助手] 找到背包按钮:', selectors[i]);
-                _lastInventoryBtn = btn; // ✅ 记住按钮
+                _lastInventoryBtn = btn;
                 btn.click();
                 return true;
             }
         }
-
         var funcNames = ['openInventory', 'openBag', 'showInventory', 'toggleInventory', 'openStorage'];
         for (var j = 0; j < funcNames.length; j++) {
             if (typeof window[funcNames[j]] === 'function') {
@@ -103,30 +104,23 @@
                 return true;
             }
         }
-
         return false;
     }
 
-    // ✅ 关闭背包：优先用记住的按钮 toggle，其次找关闭按钮，最后 ESC
     function closeInventory() {
         console.log('[储物助手] 关闭背包...');
-
-        // 方式1：再次点击打开背包的按钮（toggle 关闭）
         if (_lastInventoryBtn && _lastInventoryBtn.offsetParent !== null) {
             console.log('[储物助手] 再次点击背包按钮关闭');
             _lastInventoryBtn.click();
             _lastInventoryBtn = null;
             return;
         }
-
-        // 方式2：查找关闭按钮
         var closeSelectors = [
             '.inventory-panel .close-btn', '.bag-panel .close-btn',
             '.modal-overlay .close-btn', '[onclick*="closeInventory"]',
             '[onclick*="closeBag"]', '.modal-close',
             '.inventory-panel .close', '.bag-panel .close',
         ];
-
         for (var i = 0; i < closeSelectors.length; i++) {
             var btn = document.querySelector(closeSelectors[i]);
             if (btn && btn.offsetParent !== null) {
@@ -135,21 +129,14 @@
                 return;
             }
         }
-
-        // 方式3：查找模态框遮罩并点击
         var overlay = document.querySelector('.modal-overlay');
         if (overlay && overlay.offsetParent !== null) {
             console.log('[储物助手] 点击遮罩关闭');
             overlay.click();
             return;
         }
-
-        // 方式4：ESC
         console.log('[储物助手] 发送 ESC 关闭');
-        try {
-            var esc = new KeyboardEvent('keydown', { key:'Escape', keyCode:27, bubbles:true });
-            document.dispatchEvent(esc);
-        } catch(e) {}
+        try { var esc = new KeyboardEvent('keydown', { key:'Escape', keyCode:27, bubbles:true }); document.dispatchEvent(esc); } catch(e) {}
     }
 
     // ========== 捕获 sellItem ==========
@@ -184,14 +171,13 @@
         if (items&&items.length>0) { window._inventoryCache=items; try{localStorage.setItem('inventory_cache',JSON.stringify(items));}catch(e){} }
     }
 
-    // ✅ 刷新流程：打开背包 → 等数据 → 关闭背包 → 刷新列表
     function manualRefresh() {
         console.log('[储物助手] ===== 开始刷新 =====');
         openInventory();
         setTimeout(function() {
             var data = getInventoryData();
             if (data && data.length > 0) saveCache(data);
-            closeInventory(); // ✅ 关闭背包
+            closeInventory();
             render();
             var btn = document.getElementById(NS+'-refresh-btn');
             if (btn) { btn.textContent='🔄'; btn.style.opacity='1'; }
@@ -204,9 +190,17 @@
     }
 
     // ========== 工具函数 ==========
+    function isCurrency(item) {
+        if (!item) return false;
+        if (item.type === 'currency') return true;
+        // 灵石通常名称包含"灵石"且类型为特殊类型
+        if (item.name && (item.name === '灵石' || item.name.indexOf('灵石') >= 0) && item.type === 'currency') return true;
+        return false;
+    }
+
     function canSell(item) {
         if (!item) return false;
-        if (item.type==='currency') return false;
+        if (item.type === 'currency') return false;
         if (item.isEquipped||item.isIncarnationEquipped) return false;
         if (item.isLocked) return false;
         if (item.isNatal||item.isBound) return false;
@@ -306,15 +300,34 @@
             empty.appendChild(h('button','btn btn--full',{onclick:function(){manualRefresh();}},'🔄 刷新数据'));
             contentArea.appendChild(empty);
         }else{
-            var results=data.filter(function(item){return matchItem(item,query);});
+            // ✅ 过滤：排除灵石类货币，单独统计
+            var items = data.filter(function(item) { return !isCurrency(item); });
+            var currencies = data.filter(function(item) { return isCurrency(item); });
+            var totalCurrency = 0;
+            currencies.forEach(function(c) { totalCurrency += (c.quantity || 0); });
+
+            var results = items.filter(function(item) { return matchItem(item, query); });
             results.sort(function(a,b){return (canSell(a)?0:1)-(canSell(b)?0:1);});
-            var sc=0,sg=0,uc=0;
-            results.forEach(function(item){if(canSell(item)){sc+=item.quantity||1;sg+=(item.sellPrice||1)*(item.quantity||1);}else{uc+=item.quantity||1;}});
-            var statsDiv=h('div','stats');statsDiv.innerHTML='共 <b>'+results.length+'</b> 种'+(sc>0?' <span class="'+NS+'-text-green">可售 <b>'+sc+'</b>件 ≈ <b>'+fmtNum(sg)+'</b>灵石</span>':'')+(uc>0?' <span class="'+NS+'-text-red">不可售 '+uc+'件</span>':'');
+
+            var sc=0, sg=0, uc=0;
+            results.forEach(function(item){
+                if(canSell(item)){sc+=item.quantity||1;sg+=(item.sellPrice||1)*(item.quantity||1);}
+                else{uc+=item.quantity||1;}
+            });
+
+            // ✅ 统计栏：货币单独显示
+            var statsHtml = '共 <b>'+results.length+'</b> 种';
+            if (totalCurrency > 0) statsHtml += ' <span class="'+NS+'-text-dim">| 💰 <b>'+fmtNum(totalCurrency)+'</b>灵石</span>';
+            if (sc>0) statsHtml += ' <span class="'+NS+'-text-green">可售 <b>'+sc+'</b>件 ≈ <b>'+fmtNum(sg)+'</b>灵石</span>';
+            if (uc>0) statsHtml += ' <span class="'+NS+'-text-red">不可售 '+uc+'件</span>';
+            var statsDiv=h('div','stats');statsDiv.innerHTML=statsHtml;
             contentArea.appendChild(statsDiv);
+
             if(results.length===0)contentArea.appendChild(h('div','notfound',{},'未找到匹配的物品'));
+
             if(!_sellItemFn)captureSellFunction();
             if(!_sellItemFn&&typeof sellItem==='function')_sellItemFn=sellItem;
+
             results.forEach(function(item,i){
                 var sellable=canSell(item),rColor=getRarityColor(item.rarity),price=item.sellPrice||1,reason=sellable?'':getUnsellableReason(item);
                 var tagHtml='';
@@ -372,7 +385,7 @@
         captureSellFunction();
         var d=getInventoryData();if(d&&d.length>0)saveCache(d);
         panel._query='';panel.style.display='none';
-        console.log('✅ 储物助手 v4.0 | 刷新后自动关闭背包');
+        console.log('✅ 储物助手 v4.1 | 灵石不计入不可售');
     }
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();
