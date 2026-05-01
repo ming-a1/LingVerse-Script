@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         天道试炼塔自动挑战助手
 // @namespace    ling-trial-tower-assistant
-// @version      4.3.0
-// @description  PC+移动端自动挑战天道试炼塔，暴击优先排序、灵石刷新、主题切换、冥想开关、面板位置/收起记忆
+// @version      4.3.1
+// @description  PC+移动端自动挑战天道试炼塔，暴击优先排序、灵石刷新、主题切换、冥想开关、面板记忆、API退避、盐值验证
 // @author       AutoTrial
 // @match        https://ling.muge.info/*
 // @match        http://ling.muge.info/*
@@ -18,6 +18,22 @@
 (function() {
     'use strict';
 
+    // ============ 盐值验证 ============
+    function getSalt() {
+        if (window.__S) return window.__S;
+        try { if (typeof __S !== 'undefined') return __S; } catch(e) {}
+        const ss = sessionStorage.getItem('_salt');
+        if (ss) return ss;
+        return '';
+    }
+
+    const SALT = getSalt();
+    if (!SALT) {
+        console.log('❌ 天道试炼塔助手：未获取到盐值，脚本未激活');
+        return;
+    }
+    console.log('🔑 盐值已获取，脚本激活');
+
     // ============ 域名限制 ============
     const currentHost = window.location.hostname;
     if (!['ling.muge.info', 'www.ling.muge.info'].includes(currentHost)) return;
@@ -27,7 +43,7 @@
 
     // ============ GM兼容存储 ============
     const Storage = {
-        KEY: 'auto_trial_settings_v430',
+        KEY: 'auto_trial_settings_v431',
         save(settings) {
             try {
                 const data = JSON.stringify(settings);
@@ -427,7 +443,7 @@
         container.innerHTML = `
             <div class="tt-drag-handle" id="tt-drag-handle"></div>
             <div class="tt-header">
-                <h3>⚔️ 自动试炼塔 v4.3.0</h3>
+                <h3>⚔️ 自动试炼塔 v4.3.1</h3>
                 <div style="display:flex;gap:8px;align-items:center;">
                     <button id="tt-theme-toggle" style="background:rgba(255,255,255,0.25);border:none;color:#fff;font-size:16px;width:28px;height:28px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;">${savedSettings.theme==='dark'?'☀️':'🌙'}</button>
                     <button id="tt-minimize" style="background:rgba(255,255,255,0.25);border:none;color:#fff;font-size:16px;width:28px;height:28px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;">✕</button>
@@ -454,7 +470,7 @@
         if (pp.left !== null && pp.left !== undefined) container.style.left = pp.left + 'px';
         if (pp.top !== null && pp.top !== undefined) container.style.top = pp.top + 'px';
         container.innerHTML = `
-            <div class="at-header" id="at-header"><h3>⚔️ 自动试炼塔 v4.3.0</h3><div class="at-header-controls"><button class="at-btn-icon" id="at-theme-toggle" title="切换主题">${savedSettings.theme==='dark'?'☀️':'🌙'}</button><button class="at-btn-icon" id="at-btn-minimize">${min?'+':'−'}</button></div></div>
+            <div class="at-header" id="at-header"><h3>⚔️ 自动试炼塔 v4.3.1</h3><div class="at-header-controls"><button class="at-btn-icon" id="at-theme-toggle" title="切换主题">${savedSettings.theme==='dark'?'☀️':'🌙'}</button><button class="at-btn-icon" id="at-btn-minimize">${min?'+':'−'}</button></div></div>
             <div class="at-body" id="at-body" style="${min?'display:none':''}">
                 <div class="at-card-section"><div class="at-section-title">🎯 天赋策略</div><select class="at-select" id="at-strategy"><option value="balanced" ${savedSettings.strategy==='balanced'?'selected':''}>综合平衡（暴击优先）</option><option value="attack" ${savedSettings.strategy==='attack'?'selected':''}>攻击优先</option><option value="defense" ${savedSettings.strategy==='defense'?'selected':''}>防御优先</option><option value="legendary" ${savedSettings.strategy==='legendary'?'selected':''}>传说品质优先</option></select></div>
                 <div class="at-card-section"><div class="at-section-title">⚙️ 自动设置</div><div class="at-checkbox-grid">
@@ -605,8 +621,46 @@
     }
 
     async function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
-    async function apiCall(m, u, d) { try { if(typeof api!=='undefined'){if(typeof api.post==='function')return m==='get'?await api.get(u):await api.post(u,d);if(typeof api.request==='function')return m==='get'?await api.request('get',u):await api.request('post',u,d);} const t=localStorage.getItem('token');const o={method:m.toUpperCase(),headers:{'Content-Type':'application/json'},credentials:'include'};if(t)o.headers['Authorization']='Bearer '+t;if(d)o.body=JSON.stringify(d);return await(await fetch(u,o)).json(); } catch(e) { log.add('API错误','error');return null; } }
-    async function getTrialInfo() { const r=await apiCall('get','/api/trial-tower/info');if(r?.code===200&&r.data){if(r.data.trialStats)EffectTracker.updateFromServer(r.data.trialStats);const hf=parseInt(localStorage.getItem('auto_trial_high_floor')||'0');if(r.data.bestFloor!==undefined&&r.data.bestFloor>hf)localStorage.setItem('auto_trial_high_floor',r.data.bestFloor.toString());return r.data;}return null; }
+    
+    // ============ API退避机制 ============
+    let apiFailCount = 0;
+    let apiFailTimer = null;
+    
+    async function apiCall(m, u, d) { 
+        try { 
+            if(typeof api!=='undefined'){
+                if(typeof api.post==='function')return m==='get'?await api.get(u):await api.post(u,d);
+                if(typeof api.request==='function')return m==='get'?await api.request('get',u):await api.request('post',u,d);
+            } 
+            const t=localStorage.getItem('token');
+            const o={method:m.toUpperCase(),headers:{'Content-Type':'application/json'},credentials:'include'};
+            if(t)o.headers['Authorization']='Bearer '+t;
+            if(d)o.body=JSON.stringify(d);
+            return await(await fetch(u,o)).json(); 
+        } catch(e) { 
+            return null; 
+        } 
+    }
+    
+    async function getTrialInfo() {
+        const res = await apiCall('get', '/api/trial-tower/info');
+        if (res?.code === 200 && res.data) {
+            apiFailCount = 0;
+            if (res.data.trialStats) EffectTracker.updateFromServer(res.data.trialStats);
+            const hf = parseInt(localStorage.getItem('auto_trial_high_floor') || '0');
+            if (res.data.bestFloor !== undefined && res.data.bestFloor > hf) {
+                localStorage.setItem('auto_trial_high_floor', res.data.bestFloor.toString());
+            }
+            return res.data;
+        }
+        apiFailCount++;
+        const delay = Math.min(apiFailCount * 5000, 60000);
+        console.log(`⚠️ API请求失败，${delay/1000}秒后重试 (第${apiFailCount}次)`);
+        if (apiFailTimer) clearTimeout(apiFailTimer);
+        apiFailTimer = setTimeout(() => { apiFailCount = 0; getTrialInfo(); }, delay);
+        return null;
+    }
+    
     async function refreshBuffsWithGems() { const ib=await getTrialInfo();const bb=ib?.pendingBuffs||[];log.add('💎 使用灵石刷新...','gems');if(bb.length>0)log.add('📋 刷新前:\n'+formatBuffList(bb),'gems');const r=await apiCall('post','/api/trial-tower/refresh-buff',{useGems:true});if(r?.code===200&&r.data?.success){const ia=await getTrialInfo();const ab=ia?.pendingBuffs||[];log.add('💎 刷新成功','success');if(ab.length>0)log.add('📋 刷新后:\n'+formatBuffList(ab),'success');showToast('💎 天赋已刷新');await getTrialInfo();return true;}log.add('⚠️ 刷新失败','error');return false; }
     async function selectBuffWithRefresh() { const i=await getTrialInfo();if(!i?.pendingBuffs?.length)return false;if(G('refreshGems').checked&&!i.pendingBuffs.some(b=>b.rarity==='传说')){if(isCritSatisfied()||!i.pendingBuffs.some(b=>isCritBuff(b))){log.add('💎 尝试刷新...','gems');if(await refreshBuffsWithGems()){const ni=await getTrialInfo();if(ni?.pendingBuffs?.length){const bb=chooseBestBuff(ni.pendingBuffs);if(bb){await apiCall('post','/api/trial-tower/choose-buff',{buffId:bb.id});await getTrialInfo();return true;}}}log.add('使用当前天赋','info');}}const bb=chooseBestBuff(i.pendingBuffs);if(!bb)return false;await apiCall('post','/api/trial-tower/choose-buff',{buffId:bb.id});await getTrialInfo();return true; }
     async function startTrial(isRetry=false) { const i=await getTrialInfo();if(!i)return false;if(i.hasActiveTrial){state.currentFloor=i.activeFloor;if(i.activeBuffs?.length&&BuffTracker.buffs.length===0){for(const bn of i.activeBuffs){let r='普通';const ns=typeof bn==='string'?bn:(bn.name||bn);if(isSpecialBuff({name:ns})||/传说/.test(ns))r='传说';else if(/稀有|强化|增幅|进阶|精通/.test(ns))r='稀有';BuffTracker.add(ns.replace(/[★✦⭐💠]/g,'').trim(),r,'?');}}ensureStartMeditate();return true;}state.trialCount++;if(state.trialCount>1||isRetry)BuffTracker.clear();log.add(`开始第${state.trialCount}轮试炼`,'success');const r=await apiCall('post','/api/trial-tower/start',{useAdPoints:false});if(r?.code===200){await getTrialInfo();ensureStartMeditate();return true;}if(G('autoRetry').checked){const rr=await apiCall('post','/api/trial-tower/start',{useAdPoints:false});if(rr?.code===200){await getTrialInfo();ensureStartMeditate();return true;}}log.add('无法开始试炼','error');return false; }
@@ -658,7 +712,8 @@
         state.running = false; G('start').disabled = false; G('stop').disabled = true;
         if (state.totalFights > 0 && !completed) log.add(`📊 战斗${state.totalFights}次 抵达${state.currentFloor}层`);
         if (!completed) { const s = BuffTracker.getSummary(); if (s.total > 0) log.add(`🏆 当前天赋: ★${s.legendary} ◆${s.rare} ·${s.common}`, 'success'); }
-        updateStatus('就绪', 'stopped'); ensureStartMeditate(); setTimeout(() => getTrialInfo(), 500);
+        updateStatus('就绪', 'stopped'); ensureStartMeditate();
+        if (apiFailCount === 0) setTimeout(() => getTrialInfo(), 500);
     }
 
     function saveSettings() {
@@ -696,8 +751,12 @@
     // ============ 初始化 ============
     (async () => {
         applyTheme(savedSettings.theme || 'light');
-        await getTrialInfo();
-        console.log('✅ v4.3.0 已加载（暴击排序+主题+冥想+面板记忆）');
+        const info = await getTrialInfo();
+        if (info) {
+            console.log('✅ v4.3.1 已加载（盐值验证+API退避）');
+        } else {
+            console.log('⚠️ v4.3.1 已加载（等待登录，API已退避）');
+        }
         updateStatus('就绪', 'stopped');
     })();
 })();
