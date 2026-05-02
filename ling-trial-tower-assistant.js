@@ -91,7 +91,6 @@
 
     async function ensureStopMeditate() {
         if (!isMeditating()) return;
-        if (G('meditateEnabled')?.checked) return;
         log.add('⏸ 暂停冥想', 'meditate');
         const stopBtn = document.querySelector('.btn-stop-meditate');
         if (stopBtn) stopBtn.click();
@@ -107,7 +106,6 @@
     function ensureStartMeditate() {
         if (!G('meditateEnabled')?.checked) return;
         if (isMeditating()) return;
-        if (state.running) return;
         const medBtn = document.getElementById('meditateBtn');
         if (medBtn && medBtn.offsetParent !== null) {
             log.add('🧘 开始冥想', 'meditate');
@@ -594,6 +592,7 @@
     function getBuffDesc(buff) { if (buff.desc) return buff.desc; if (buff.effect) return buff.effect; return ''; }
     function formatBuffList(buffs) { if (!buffs?.length) return '无'; return buffs.map(b => { const desc = getBuffDesc(b); const mark = b.rarity === '传说' ? '★' : (b.rarity === '稀有' ? '◆' : '·'); return `  ${mark}[${b.name}]${desc ? ' ' + desc : ''}`; }).join('\n'); }
 
+    // ✅ 获取词条数值
     function getBuffValue(buff) {
         const d = (buff.desc || buff.name || '');
         const match = d.match(/(\d+)/);
@@ -604,7 +603,9 @@
         if (!buffs?.length) return null;
         log.add('📋 可选天赋:\n' + formatBuffList(buffs), 'buff');
         
+        // ✅ 暴击率 < 100%：特殊词条 > 暴击 > 攻击 > 生命 > 防御 > 灵力，同类型选数值最大
         if (!isCritSatisfied()) {
+            // 1. 特殊词条优先
             const specialBuffs = buffs.filter(b => isSpecialBuff(b));
             if (specialBuffs.length > 0) {
                 const w = getWeights(); let best = specialBuffs[0], bestScore = 0;
@@ -614,6 +615,7 @@
                 return best;
             }
             
+            // 2. 按优先级匹配，同类型选数值最大的
             const priorityOrder = [
                 { match: b => isCritBuff(b), name: '暴击' },
                 { match: b => /攻击|天怒|狂暴/.test((b.desc||b.name||'').toLowerCase()), name: '攻击' },
@@ -647,6 +649,7 @@
             }
         }
         
+        // ✅ 暴击满后：攻击>生命>防御>灵力>其他，同类型选数值最大的
         const postPriority = [
             { match: b => /攻击|天怒|狂暴/.test((b.desc||b.name||'').toLowerCase()), name: '攻击' },
             { match: b => /生命|血量|回春/.test((b.desc||b.name||'').toLowerCase()), name: '生命' },
@@ -678,6 +681,7 @@
             }
         }
         
+        // 兜底：选第一个
         log.add(`⭐ 默认选择: [${buffs[0].name}] ${getBuffDesc(buffs[0])}`, 'buff');
         BuffTracker.add(buffs[0].name, buffs[0].rarity, state.currentFloor);
         return buffs[0];
