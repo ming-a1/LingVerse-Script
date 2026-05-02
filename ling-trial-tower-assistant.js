@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         天道试炼塔自动挑战助手
 // @namespace    ling-trial-tower-assistant
-// @version      4.3.1
-// @description  PC+移动端自动挑战天道试炼塔，暴击优先排序、灵石刷新、主题切换、冥想开关、面板记忆、API退避、盐值验证
+// @version      4.3.2
+// @description  PC+移动端自动挑战天道试炼塔，暴击优先排序、同词条选最大、灵石刷新、主题切换、冥想开关、面板记忆、API退避、盐值验证
 // @author       AutoTrial
 // @match        https://ling.muge.info/*
 // @match        http://ling.muge.info/*
@@ -11,8 +11,8 @@
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/ming-a1/LingVerse-Script/refs/heads/main/ling-trial-tower-assistant.js
-// @updateURL    https://raw.githubusercontent.com/ming-a1/LingVerse-Script/refs/heads/main/ling-trial-tower-assistant.js
+// @downloadURL  https://raw.giteeusercontent.com/qiyes/ling-verse-script/raw/master/ling-trial-tower-assistant.js
+// @updateURL    https://raw.giteeusercontent.com/qiyes/ling-verse-script/raw/master/ling-trial-tower-assistant.js
 // ==/UserScript==
 
 (function() {
@@ -43,7 +43,7 @@
 
     // ============ GM兼容存储 ============
     const Storage = {
-        KEY: 'auto_trial_settings_v431',
+        KEY: 'auto_trial_settings_v432',
         save(settings) {
             try {
                 const data = JSON.stringify(settings);
@@ -91,6 +91,7 @@
 
     async function ensureStopMeditate() {
         if (!isMeditating()) return;
+        if (G('meditateEnabled')?.checked) return;
         log.add('⏸ 暂停冥想', 'meditate');
         const stopBtn = document.querySelector('.btn-stop-meditate');
         if (stopBtn) stopBtn.click();
@@ -106,6 +107,7 @@
     function ensureStartMeditate() {
         if (!G('meditateEnabled')?.checked) return;
         if (isMeditating()) return;
+        if (state.running) return;
         const medBtn = document.getElementById('meditateBtn');
         if (medBtn && medBtn.offsetParent !== null) {
             log.add('🧘 开始冥想', 'meditate');
@@ -443,7 +445,7 @@
         container.innerHTML = `
             <div class="tt-drag-handle" id="tt-drag-handle"></div>
             <div class="tt-header">
-                <h3>⚔️ 自动试炼塔 v4.3.1</h3>
+                <h3>⚔️ 自动试炼塔 v4.3.2</h3>
                 <div style="display:flex;gap:8px;align-items:center;">
                     <button id="tt-theme-toggle" style="background:rgba(255,255,255,0.25);border:none;color:#fff;font-size:16px;width:28px;height:28px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;">${savedSettings.theme==='dark'?'☀️':'🌙'}</button>
                     <button id="tt-minimize" style="background:rgba(255,255,255,0.25);border:none;color:#fff;font-size:16px;width:28px;height:28px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;">✕</button>
@@ -470,7 +472,7 @@
         if (pp.left !== null && pp.left !== undefined) container.style.left = pp.left + 'px';
         if (pp.top !== null && pp.top !== undefined) container.style.top = pp.top + 'px';
         container.innerHTML = `
-            <div class="at-header" id="at-header"><h3>⚔️ 自动试炼塔 v4.3.1</h3><div class="at-header-controls"><button class="at-btn-icon" id="at-theme-toggle" title="切换主题">${savedSettings.theme==='dark'?'☀️':'🌙'}</button><button class="at-btn-icon" id="at-btn-minimize">${min?'+':'−'}</button></div></div>
+            <div class="at-header" id="at-header"><h3>⚔️ 自动试炼塔 v4.3.2</h3><div class="at-header-controls"><button class="at-btn-icon" id="at-theme-toggle" title="切换主题">${savedSettings.theme==='dark'?'☀️':'🌙'}</button><button class="at-btn-icon" id="at-btn-minimize">${min?'+':'−'}</button></div></div>
             <div class="at-body" id="at-body" style="${min?'display:none':''}">
                 <div class="at-card-section"><div class="at-section-title">🎯 天赋策略</div><select class="at-select" id="at-strategy"><option value="balanced" ${savedSettings.strategy==='balanced'?'selected':''}>综合平衡（暴击优先）</option><option value="attack" ${savedSettings.strategy==='attack'?'selected':''}>攻击优先</option><option value="defense" ${savedSettings.strategy==='defense'?'selected':''}>防御优先</option><option value="legendary" ${savedSettings.strategy==='legendary'?'selected':''}>传说品质优先</option></select></div>
                 <div class="at-card-section"><div class="at-section-title">⚙️ 自动设置</div><div class="at-checkbox-grid">
@@ -592,9 +594,16 @@
     function getBuffDesc(buff) { if (buff.desc) return buff.desc; if (buff.effect) return buff.effect; return ''; }
     function formatBuffList(buffs) { if (!buffs?.length) return '无'; return buffs.map(b => { const desc = getBuffDesc(b); const mark = b.rarity === '传说' ? '★' : (b.rarity === '稀有' ? '◆' : '·'); return `  ${mark}[${b.name}]${desc ? ' ' + desc : ''}`; }).join('\n'); }
 
+    function getBuffValue(buff) {
+        const d = (buff.desc || buff.name || '');
+        const match = d.match(/(\d+)/);
+        return match ? parseFloat(match[1]) : 0;
+    }
+
     function chooseBestBuff(buffs) {
         if (!buffs?.length) return null;
         log.add('📋 可选天赋:\n' + formatBuffList(buffs), 'buff');
+        
         if (!isCritSatisfied()) {
             const specialBuffs = buffs.filter(b => isSpecialBuff(b));
             if (specialBuffs.length > 0) {
@@ -604,20 +613,74 @@
                 BuffTracker.add(best.name, best.rarity, state.currentFloor);
                 return best;
             }
+            
             const priorityOrder = [
-                b => isCritBuff(b),
-                b => /攻击|天怒|狂暴/.test((b.desc||b.name||'').toLowerCase()),
-                b => /生命|血量|回春/.test((b.desc||b.name||'').toLowerCase()),
-                b => /防御|防|金刚|铁壁/.test((b.desc||b.name||'').toLowerCase()),
-                b => /灵力|灵|法力/.test((b.desc||b.name||'').toLowerCase()),
+                { match: b => isCritBuff(b), name: '暴击' },
+                { match: b => /攻击|天怒|狂暴/.test((b.desc||b.name||'').toLowerCase()), name: '攻击' },
+                { match: b => /生命|血量|回春/.test((b.desc||b.name||'').toLowerCase()), name: '生命' },
+                { match: b => /防御|防|金刚|铁壁/.test((b.desc||b.name||'').toLowerCase()), name: '防御' },
+                { match: b => /灵力|灵|法力/.test((b.desc||b.name||'').toLowerCase()), name: '灵力' },
             ];
-            for (const matcher of priorityOrder) { const match = buffs.find(matcher); if (match) { log.add(`💥 优先选择: [${match.name}] ${getBuffDesc(match)} (暴击: ${Math.round(EffectTracker.getCritBonus())}%)`, 'crit'); BuffTracker.add(match.name, match.rarity, state.currentFloor); return match; } }
+            
+            for (const { match, name } of priorityOrder) {
+                const matched = buffs.filter(match);
+                if (matched.length > 0) {
+                    let best = matched[0];
+                    if (matched.length > 1) {
+                        best = matched.reduce((a, b) => {
+                            const va = getBuffValue(a);
+                            const vb = getBuffValue(b);
+                            if (vb > va) return b;
+                            if (vb === va) {
+                                const ra = a.rarity==='传说'?3:a.rarity==='稀有'?2:1;
+                                const rb = b.rarity==='传说'?3:b.rarity==='稀有'?2:1;
+                                return rb > ra ? b : a;
+                            }
+                            return a;
+                        });
+                        log.add(`📊 同类型${matched.length}个${name}词条，选最大: [${best.name}]`, 'crit');
+                    }
+                    log.add(`💥 优先选择: [${best.name}] ${getBuffDesc(best)} (暴击: ${Math.round(EffectTracker.getCritBonus())}%)`, 'crit');
+                    BuffTracker.add(best.name, best.rarity, state.currentFloor);
+                    return best;
+                }
+            }
         }
-        const w = getWeights(); let best = buffs[0], bestScore = 0;
-        buffs.forEach(b => { let s=0; if(b.rarity==='传说')s+=w.leg;else if(b.rarity==='稀有')s+=w.rare;else s+=w.com; const d=(b.desc||b.name||'').toLowerCase(); if(isCritBuff(b))s+=1; if(/攻击|天怒|狂暴/.test(d))s+=w.atk; if(/防御|防|金刚|铁壁/.test(d))s+=w.def; if(/生命|血量|回春/.test(d))s+=w.hp; if(/灵力|灵|法力/.test(d))s+=w.mp; if(/不死/.test(d))s+=10; if(/斩杀/.test(d))s+=9; if(/汲取|天道/.test(d))s+=9; if(/灵根/.test(d))s+=10; if(s>bestScore){bestScore=s;best=b;} });
-        log.add(`⭐ 综合选择: [${best.name}] ${getBuffDesc(best)} (${best.rarity})`, 'buff');
-        BuffTracker.add(best.name, best.rarity, state.currentFloor);
-        return best;
+        
+        const postPriority = [
+            { match: b => /攻击|天怒|狂暴/.test((b.desc||b.name||'').toLowerCase()), name: '攻击' },
+            { match: b => /生命|血量|回春/.test((b.desc||b.name||'').toLowerCase()), name: '生命' },
+            { match: b => /防御|防|金刚|铁壁/.test((b.desc||b.name||'').toLowerCase()), name: '防御' },
+            { match: b => /灵力|灵|法力/.test((b.desc||b.name||'').toLowerCase()), name: '灵力' },
+        ];
+        
+        for (const { match, name } of postPriority) {
+            const matched = buffs.filter(match);
+            if (matched.length > 0) {
+                let best = matched[0];
+                if (matched.length > 1) {
+                    best = matched.reduce((a, b) => {
+                        const va = getBuffValue(a);
+                        const vb = getBuffValue(b);
+                        if (vb > va) return b;
+                        if (vb === va) {
+                            const ra = a.rarity==='传说'?3:a.rarity==='稀有'?2:1;
+                            const rb = b.rarity==='传说'?3:b.rarity==='稀有'?2:1;
+                            return rb > ra ? b : a;
+                        }
+                        return a;
+                    });
+                    log.add(`📊 同类型${matched.length}个${name}词条，选最大: [${best.name}]`, 'crit');
+                }
+                log.add(`⭐ 暴击已满·选择: [${best.name}] ${getBuffDesc(best)}`, 'buff');
+                BuffTracker.add(best.name, best.rarity, state.currentFloor);
+                return best;
+            }
+        }
+        
+        log.add(`⭐ 默认选择: [${buffs[0].name}] ${getBuffDesc(buffs[0])}`, 'buff');
+        BuffTracker.add(buffs[0].name, buffs[0].rarity, state.currentFloor);
+        return buffs[0];
     }
 
     async function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -753,9 +816,9 @@
         applyTheme(savedSettings.theme || 'light');
         const info = await getTrialInfo();
         if (info) {
-            console.log('✅ v4.3.1 已加载（盐值验证+API退避）');
+            console.log('✅ v4.3.2 已加载（同词条选最大+盐值验证+API退避）');
         } else {
-            console.log('⚠️ v4.3.1 已加载（等待登录，API已退避）');
+            console.log('⚠️ v4.3.2 已加载（等待登录，API已退避）');
         }
         updateStatus('就绪', 'stopped');
     })();

@@ -6,7 +6,7 @@
 
 | 脚本 | 版本 | 功能 |
 |------|------|------|
-| **天道试炼塔自动挑战助手** | v4.3.1 | 自动挑战试炼塔，智能选择天赋 |
+| **天道试炼塔自动挑战助手** | v4.3.2 | 自动挑战试炼塔，智能选择天赋 |
 | **灵界储物助手** | v2.5 | 储物出售管理，批量出售物品 |
 
 ---
@@ -15,11 +15,11 @@
 
 ### 功能特性
 - ⚔️ **自动挑战**：自动循环挑战试炼塔，支持设置目标层数
-- 🎯 **智能选天赋**：暴击优先排序，支持综合平衡/攻击优先/防御优先/传说品质优先四种策略
+- 🎯 **智能选天赋**：暴击优先排序，同类型词条自动选最大值，支持四种策略
 - 💎 **灵石刷新**：自动使用灵石刷新天赋池，优先获取高品质天赋
 - 📊 **天赋追踪**：实时显示天赋加成效果（攻击/防御/生命/灵力/暴击等）
 - 🧬 **天赋组合记录**：记录当前轮次获得的所有天赋及稀有度统计
-- 🧘 **冥想控制**：自动停止/开始冥想，优化挂机体验
+- 🧘 **冥想控制**：智能冥想管理，战斗中不自动冥想，战斗结束自动恢复
 - 🌓 **主题切换**：日间/夜间模式，保护视力
 - 🔑 **盐值验证**：自动获取会话盐值，未登录时脚本不激活，避免无效请求
 - ⏳ **API退避机制**：API请求失败时自动递增等待时间（5秒~60秒），恢复后自动重置
@@ -35,6 +35,12 @@
 | 攻击优先 | 优先选择攻击类天赋 |
 | 防御优先 | 优先选择防御/生命类天赋 |
 | 传说品质优先 | 优先选择传说品质天赋 |
+
+### 同词条选最大机制（v4.3.2 新增）
+当同时出现多个相同类型的天赋词条时（如多个攻击类天赋），脚本会自动比较数值大小，优先选择数值最高的词条：
+- 📊 **数值优先**：同类型词条中，选择加成数值最大的
+- 🏆 **同数值选品质**：数值相同时，优先选择品质更高的
+- 📋 **日志记录**：选择过程会在日志中显示"同类型N个词条，选最大"
 
 ### 特殊词条识别
 自动识别并优先选择以下特殊天赋：
@@ -98,7 +104,7 @@
 #### 方式一：直接安装（推荐）
 点击下方链接自动安装：
 
-- [安装 天道试炼塔自动挑战助手](https://raw.githubusercontent.com/ming-a1/LingVerse-Script/refs/heads/main/ling-trial-tower-assistant.js)
+- [安装 天道试炼塔自动挑战助手](https://raw.giteeusercontent.com/qiyes/ling-verse-script/raw/master/ling-trial-tower-assistant.js)
 - [安装 灵界储物助手](https://raw.githubusercontent.com/ming-a1/LingVerse-Script/refs/heads/main/lingverse-sell-helper.js)
 
 #### 方式二：手动安装
@@ -111,7 +117,7 @@
 1. 打开 Via 浏览器，进入 **设置** → **脚本**
 2. 点击右上角 **+** 号 → **从链接导入**
 3. 粘贴脚本直链地址：
-   - 天道试炼塔自动挑战助手：`https://raw.githubusercontent.com/ming-a1/LingVerse-Script/refs/heads/main/ling-trial-tower-assistant.js`
+   - 天道试炼塔自动挑战助手：`https://raw.giteeusercontent.com/qiyes/ling-verse-script/raw/master/ling-trial-tower-assistant.js`
    - 灵界储物助手：`https://raw.githubusercontent.com/ming-a1/LingVerse-Script/refs/heads/main/lingverse-sell-helper.js`
 4. 点击 **确定** 导入
 5. 确保脚本开关已开启
@@ -144,6 +150,11 @@
 ---
 
 ## 🔄 更新日志
+
+### 天道试炼塔自动挑战助手 v4.3.2
+- ✨ 新增同词条选最大机制：出现多个同类型天赋时自动选数值最大的
+- ✨ 优化冥想逻辑：战斗中不自动冥想，战斗结束自动恢复
+- ✨ 更新脚本源地址至 Gitee，提升国内用户访问速度
 
 ### 天道试炼塔自动挑战助手 v4.3.1
 - ✨ 新增盐值验证机制：未登录时脚本不激活，避免无效请求
@@ -188,6 +199,15 @@
 </details>
 
 <details>
+<summary><strong>Q: 多个同类型天赋如何选择？</strong></summary>
+
+- v4.3.2 起支持同词条选最大机制
+- 脚本会自动比较同类型词条的数值大小
+- 优先选择数值最大的，数值相同时选品质更高的
+- 选择过程会在战斗日志中显示
+</details>
+
+<details>
 <summary><strong>Q: 出售按钮点击无效？</strong></summary>
 
 - 请先打开游戏原生储物面板以激活出售功能
@@ -216,6 +236,7 @@
 ## 🔗 相关链接
 
 - [GitHub 仓库](https://github.com/ming-a1/LingVerse-Script)
+- [Gitee 仓库](https://gitee.com/qiyes/ling-verse-script)（国内镜像，更新更快）
 - [灵界游戏官网](https://ling.muge.info/)
 - [问题反馈](https://github.com/ming-a1/LingVerse-Script/issues)
 
