@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         自动试炼塔[X]
 // @namespace    https://github.com/yourname/lingverse-trial-tower
-// @version      1.6.1
+// @version      1.6.2
 // @description  智能天赋选择(暴击优先/特殊词条排序)，自动挑战/重试/冥想处理，浏览器标题显示层数，天赋权重自配，主题日夜切换，蓝色呼吸灯提示，PC端标题栏收起/移动端悬浮球，面板位置记忆，屏幕常亮
 // @author       耀
 // @match        *://ling.muge.info/*
@@ -372,8 +372,13 @@
         try {
             const sr = await apiGet('/api/game/meditate/status');
             const isMeditating = sr && sr.code === 200 && sr.data && sr.data.isMeditating;
-            if (isMeditating) { addLog('info', '检测到正在冥想，先收功...'); await apiPost('/api/game/meditate/stop'); state._meditateActive = false; await wait(500); if (state.autoMeditate) { addLog('info', '1秒后重新开启冥想...'); await wait(1000); const r = await apiPost('/api/game/meditate/start'); if (r && r.code === 200) { state._meditateActive = true; addLog('success', '冥想已重新开启'); } else { addLog('warn', '冥想重新开启失败'); } } else { addLog('success', '冥想已结束'); } }
-            else if (state.autoMeditate) { addLog('info', '开启冥想...'); const r = await apiPost('/api/game/meditate/start'); if (r && r.code === 200) { state._meditateActive = true; addLog('success', '冥想已开启'); } }
+            if (isMeditating) {
+                addLog('info', '检测到正在冥想，先收功...');
+                await apiPost('/api/game/meditate/stop');
+                state._meditateActive = false;
+                addLog('success', '收功完成，等待进入试炼...');
+                await wait(1000);
+            }
         } catch (e) { addLog('warn', '冥想处理异常'); }
     }
 
@@ -409,10 +414,23 @@
             addLog('info', '3秒后自动重试...'); await wait(3000);
             if (state.isRunning && !state._stopRequested) {
                 addLog('info', '━━━ 自动重试 ━━━'); state.currentFloor = 0; state._refreshAttempts = 0; updateTitle();
-                if (state.autoMeditate) { try { const sr = await apiGet('/api/game/meditate/status'); if (sr && sr.code === 200 && sr.data && sr.data.isMeditating) { addLog('info', '重试前先收功...'); await apiPost('/api/game/meditate/stop'); state._meditateActive = false; await wait(500); } } catch (e) {} }
+                if (state.autoMeditate) { try { const sr = await apiGet('/api/game/meditate/status'); if (sr && sr.code === 200 && sr.data && sr.data.isMeditating) { addLog('info', '检测到正在冥想，先收功...'); await apiPost('/api/game/meditate/stop'); state._meditateActive = false; await wait(500); addLog('success', '收功完成，准备重试...'); } } catch (e) {} }
                 try {
                     const resetRes = await apiPost('/api/trial-tower/start', { useAdPoints: false });
-                    if (resetRes && resetRes.code === 200) { addLog('success', '试炼已重置'); if (state.autoMeditate) { try { const r = await apiPost('/api/game/meditate/start'); if (r && r.code === 200) { state._meditateActive = true; addLog('success', '冥想已重新开启'); } } catch (e) {} } trialLoop(); return; }
+                    if (resetRes && resetRes.code === 200) {
+                        addLog('success', '试炼已重置');
+                        // 重试后延迟开冥想
+                        if (state.autoMeditate) {
+                            setTimeout(async () => {
+                                try {
+                                    const r = await apiPost('/api/game/meditate/start');
+                                    if (r && r.code === 200) { state._meditateActive = true; addLog('success', '冥想已重新开启'); }
+                                    else { addLog('warn', '冥想重新开启失败'); }
+                                } catch (e) { addLog('warn', '冥想重新开启异常'); }
+                            }, 3000);
+                        }
+                        trialLoop(); return;
+                    }
                     else { addLog('error', '重试失败: ' + (resetRes?.message || '')); }
                 } catch (e) { addLog('error', '重试异常: ' + e.message); }
             }
@@ -425,11 +443,32 @@
         state.isRunning = true; state._stopRequested = false; state.currentFloor = 0; state._refreshAttempts = 0;
         if (_retainedBuffs.length > 0) { state.buffs = [..._retainedBuffs]; state.stats = _retainedStats ? { ..._retainedStats } : null; }
         updateAllStats(); toggleButtons(true); setStatus('running', '启动中...'); updateBreathingLight(); updateTitle();
+
+        // 先检测并停止冥想
         await handleMeditationBeforeStart();
+
         if (state.skipCombat) { ensureSkipCombat(true); addLog('info', '跳过战斗: 开'); }
         addLog('gold', `━━━ 自动试炼开始 (${state.useDefaultStrategy ? '默认策略' : '自配权重'}) ━━━`);
+
+        // 先开始试炼
         trialLoop().catch(e => { addLog('error', '异常: ' + e.message); stopTrialInternal(); });
+
+        // 倒计时后开启冥想
+        if (state.autoMeditate) {
+            const countdownSeconds = 3;
+            addLog('info', `${countdownSeconds}秒后重新开启冥想...`);
+            for (let i = countdownSeconds - 1; i >= 0; i--) {
+                await wait(1000);
+                if (i > 0) addLog('info', `${i}秒后重新开启冥想...`);
+            }
+            try {
+                const r = await apiPost('/api/game/meditate/start');
+                if (r && r.code === 200) { state._meditateActive = true; addLog('success', '冥想已重新开启'); }
+                else { addLog('warn', '冥想重新开启失败'); }
+            } catch (e) { addLog('warn', '冥想重新开启异常'); }
+        }
     }
+
     function stopTrial() { state._stopRequested = true; addLog('warn', '收到停止指令...'); }
     function stopTrialInternal() { state.isRunning = false; state._stopRequested = false; toggleButtons(false); setStatus('idle', '就绪'); updateBreathingLight(); updateTitle(); if (state.skipCombat) ensureSkipCombat(false); if (!state.autoMeditate && state._meditateActive) { stopMeditationIfNeeded(); } }
     async function stopMeditationIfNeeded() { try { const sr = await apiGet('/api/game/meditate/status'); if (sr?.code === 200 && sr.data?.isMeditating) { await apiPost('/api/game/meditate/stop'); state._meditateActive = false; } } catch (e) {} }
@@ -502,6 +541,6 @@
     }
 
     function bindEvents() { document.getElementById('atp-theme-btn').addEventListener('click', cycleTheme); document.getElementById('atp-config-btn').addEventListener('click', openConfigModal); document.getElementById('atp-btn-start').addEventListener('click', startTrial); document.getElementById('atp-btn-stop').addEventListener('click', stopTrial); }
-    function init() { if (document.getElementById('atp-container')) return; loadConfig(); syncWakeLock(); initThemeWatcher(); updateThemeStyle(); buildPanel(); bindEvents(); addLog('info', `自动试炼塔 v1.6.1 已就绪`); addLog('info', '盐值验证通过'); addLog('info', `策略已加载：${state.useDefaultStrategy ? '默认策略' : '自配权重'}`); updateAllStats(); }
+    function init() { if (document.getElementById('atp-container')) return; loadConfig(); syncWakeLock(); initThemeWatcher(); updateThemeStyle(); buildPanel(); bindEvents(); addLog('info', `自动试炼塔 v1.6.2 已就绪`); addLog('info', '盐值验证通过'); addLog('info', `策略已加载：${state.useDefaultStrategy ? '默认策略' : '自配权重'}`); updateAllStats(); }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
