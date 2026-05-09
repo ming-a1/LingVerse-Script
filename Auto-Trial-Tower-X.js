@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         自动试炼塔[X]
 // @namespace    https://github.com/yourname/lingverse-trial-tower
-// @version      1.6.5
-// @description  智能天赋选择(暴击优先/特殊词条排序)，自动挑战/重试/冥想处理，浏览器标题显示层数，天赋权重自配，主题日夜切换，蓝色呼吸灯提示，PC端标题栏收起/移动端悬浮球，面板位置记忆，屏幕常亮
+// @version      1.6.7
+// @description  智能天赋选择(暴击优先/特殊词条排序)，自动挑战/重试/冥想处理，浏览器标题显示层数，天赋权重自配，面板位置记忆，屏幕常亮，跟随页面主题
 // @author       耀
 // @match        *://ling.muge.info/*
 // @grant        none
@@ -23,14 +23,11 @@
     const POS_KEY = 'atp_position';
     const FLOAT_POS_KEY = 'atp_float_position';
     const COLLAPSED_KEY = 'atp_collapsed';
-    const THEME_KEY = 'atp_theme';
 
     function loadJSON(key) { try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : null; } catch (e) { return null; } }
     function saveJSON(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
     function loadCollapsed() { try { return localStorage.getItem(COLLAPSED_KEY) === '1'; } catch (e) { return false; } }
     function saveCollapsed(collapsed) { try { localStorage.setItem(COLLAPSED_KEY, collapsed ? '1' : '0'); } catch (e) {} }
-    function loadTheme() { try { return localStorage.getItem(THEME_KEY) || 'dark'; } catch (e) { return 'dark'; } }
-    function saveTheme(theme) { try { localStorage.setItem(THEME_KEY, theme); } catch (e) {} }
 
     async function requestWakeLock() {
         if (!state.screenAlwaysOn || !('wakeLock' in navigator)) return;
@@ -48,7 +45,6 @@
 
     const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 
-    let currentTheme = loadTheme();
     const DEFAULT_PAGE_TITLE = document.title || 'LingVerse';
 
     const DEFAULT_WEIGHTS = {
@@ -94,7 +90,10 @@
     document.head.appendChild(style);
 
     function updateThemeStyle() {
-        const isDark = currentTheme === 'dark' || (currentTheme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        const html = document.documentElement;
+        const isLight = html.classList.contains('theme-light');
+        const isDark = !isLight;
+
         const bg = isDark ? '#151d2e' : '#faf8f5';
         const bg2 = isDark ? '#111827' : '#f5f0e8';
         const border = isDark ? 'rgba(201,153,58,0.45)' : 'rgba(180,140,50,0.5)';
@@ -242,17 +241,11 @@
     }
 
     function initThemeWatcher() {
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-            if (currentTheme === 'system') updateThemeStyle();
+        const observer = new MutationObserver(() => {
+            updateThemeStyle();
         });
-    }
-
-    function cycleTheme() {
-        if (currentTheme === 'dark') currentTheme = 'light';
-        else currentTheme = 'dark';
-        saveTheme(currentTheme);
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
         updateThemeStyle();
-        addLog('info', `主题切换: ${currentTheme === 'dark' ? '夜间' : '日间'}`);
     }
 
     const state = {
@@ -294,7 +287,7 @@
         const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         if (!els.logEl) return;
         const entry = document.createElement('div'); entry.className = `atp-log-entry ${type}`;
-        const isDark = currentTheme === 'dark' || (currentTheme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        const isDark = !document.documentElement.classList.contains('theme-light');
         entry.innerHTML = `<span style="color:${isDark ? '#6a6560' : '#8a8278'};">[${time}]</span> ${message}`;
         els.logEl.appendChild(entry); els.logEl.scrollTop = els.logEl.scrollHeight;
         while (els.logEl.children.length > 200) els.logEl.removeChild(els.logEl.firstChild);
@@ -311,14 +304,12 @@
         const running = state.isRunning;
         const panelHidden = state.isCollapsed || !state.isPanelOpen;
 
-        // PC端：运行中 + 收起 → 面板蓝色呼吸
         if (running && panelHidden && !isMobile()) {
             pnl.classList.add('breathing-blue');
         } else {
             pnl.classList.remove('breathing-blue');
         }
 
-        // 移动端悬浮球：运行中 + 收起 → 金色呼吸
         if (running && panelHidden) {
             floatBtn.classList.add('breathing');
         } else {
@@ -363,7 +354,7 @@
     function getBuffRarityScore(rarity) { const map = { '传说': 5, '稀有': 4, '史诗': 4, '优良': 3, '普通': 1 }; return map[rarity] || 1; }
 
     function formatBuffLine(buff, hl) {
-        const isDark = currentTheme === 'dark' || (currentTheme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        const isDark = !document.documentElement.classList.contains('theme-light');
         const sym = buff.rarity === '传说' ? '⭐' : '◆', name = buff.name || '?', desc = buff.desc || '', weight = getBuffWeight(name, desc), prefix = hl ? '▶ ' : '';
         return `${prefix}${sym}[${name}] ${desc} <span style="color:${isDark ? '#6a6560' : '#8a8278'};">(${weight}分)</span>`;
     }
@@ -396,13 +387,13 @@
                 addLog('info', '检测到正在冥想，先收功...');
                 if (clickStopMeditate()) {
                     addLog('success', '收功完成，等待进入试炼...');
-                    await wait(1500); // ✅ 修改：延时从 500ms 改为 1500ms
+                    await wait(3000);
                 } else {
                     addLog('warn', '未找到收功按钮，使用 API 收功');
                     await apiPost('/api/game/meditate/stop');
                     state._meditateActive = false;
                     addLog('success', '收功完成，等待进入试炼...');
-                    await wait(1500); // ✅ 修改：延时从 500ms 改为 1500ms
+                    await wait(3000);
                 }
             }
         } catch (e) { addLog('warn', '冥想处理异常'); }
@@ -446,17 +437,19 @@
                         if (sr && sr.code === 200 && sr.data && sr.data.isMeditating) {
                             addLog('info', '检测到正在冥想，先收功...');
                             if (clickStopMeditate()) {
-                                await wait(1500); // ✅ 修改：延时从 500ms 改为 1500ms
+                                await wait(3000);
                                 addLog('success', '收功完成，准备重试...');
                             } else {
                                 await apiPost('/api/game/meditate/stop');
                                 state._meditateActive = false;
-                                await wait(1500); // ✅ 修改：延时从 500ms 改为 1500ms
+                                await wait(3000);
                                 addLog('success', '收功完成，准备重试...');
                             }
                         }
                     } catch (e) {}
                 }
+                addLog('info', '等待2秒后发起重置...');
+                await wait(2000);
                 try {
                     const resetRes = await apiPost('/api/trial-tower/start', { useAdPoints: false });
                     if (resetRes && resetRes.code === 200) {
@@ -532,14 +525,13 @@
         btnCustom.addEventListener('click', function (e) { e.stopPropagation(); btnCustom.classList.add('active'); btnDefault.classList.remove('active'); weightArea.classList.remove('disabled'); });
         const strategyToggle = document.createElement('div'); strategyToggle.className = 'atp-strategy-toggle'; strategyToggle.appendChild(btnDefault); strategyToggle.appendChild(btnCustom);
         const dialog = document.createElement('div'); dialog.className = 'atp-config-dialog';
-        const isDark = currentTheme === 'dark' || (currentTheme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        const isDark = !document.documentElement.classList.contains('theme-light');
         const gold = isDark ? '#c9993a' : '#8b6914';
         const text3 = isDark ? '#6a6560' : '#8a8278';
-        dialog.innerHTML = `<div class="atp-config-header"><span class="atp-config-title">⚙ 自动试炼 · 配置</span><button class="atp-config-close" id="atp-config-close">✕</button></div><div class="atp-config-body"><div class="atp-section-title">✦ 试炼设置</div><label class="atp-toggle-row"><span>失败自动重试</span><input type="checkbox" id="atp-cfg-auto-retry" ${state.autoRetry ? 'checked' : ''}></label><label class="atp-toggle-row"><span>跳过战斗动画</span><input type="checkbox" id="atp-cfg-skip-combat" ${state.skipCombat ? 'checked' : ''}></label><div class="atp-toggle-row"><span>到达此层停止</span><input type="number" id="atp-cfg-stop-floor" value="${state.stopOnFloor}" min="0" max="999"></div><div class="atp-section-title">✦ 天赋刷新</div><label class="atp-toggle-row"><span>灵石刷新天赋</span><input type="checkbox" id="atp-cfg-stone-refresh" ${state.stoneRefresh ? 'checked' : ''}></label><div class="atp-toggle-row"><span>最大刷新次数</span><input type="number" id="atp-cfg-refresh-max" value="${state.refreshMaxAttempts}" min="1" max="10"></div><div class="atp-section-title">✦ 天赋策略 (二选一)</div><div id="atp-strategy-container"></div><div id="atp-weight-container"></div><div class="atp-weight-reset" id="atp-weight-reset">恢复默认权重</div><div class="atp-section-title" style="margin-top:4px;">✦ 浏览器标题</div><label class="atp-toggle-row"><span>标题显示挑战层数</span><input type="checkbox" id="atp-cfg-show-floor" ${state.showFloorInTitle ? 'checked' : ''}></label><div class="atp-toggle-row"><span>标题模板</span><input type="text" id="atp-cfg-title-template" value="${state.titleTemplate.replace(/"/g, '&quot;')}" placeholder="天道塔挑战中【{floor}】层"></div><div class="atp-section-title" style="margin-top:4px;">✦ 主题</div><div class="atp-toggle-row" id="atp-cfg-theme-system" style="cursor:pointer;"><span>跟随系统</span><span style="color:${currentTheme==='system'?gold:text3};font-weight:${currentTheme==='system'?'700':'400'};">${currentTheme==='system'?'● 当前':'○'}</span></div><div class="atp-section-title">✦ 其他</div><label class="atp-toggle-row"><span>自动冥想</span><input type="checkbox" id="atp-cfg-auto-meditate" ${state.autoMeditate ? 'checked' : ''}></label><label class="atp-toggle-row"><span>屏幕常亮</span><input type="checkbox" id="atp-cfg-screen-always-on" ${state.screenAlwaysOn ? 'checked' : ''}></label></div><div class="atp-config-footer"><button class="atp-config-save-btn" id="atp-config-save">保 存 配 置</button></div>`;
+        dialog.innerHTML = `<div class="atp-config-header"><span class="atp-config-title">⚙ 自动试炼 · 配置</span><button class="atp-config-close" id="atp-config-close">✕</button></div><div class="atp-config-body"><div class="atp-section-title">✦ 试炼设置</div><label class="atp-toggle-row"><span>失败自动重试</span><input type="checkbox" id="atp-cfg-auto-retry" ${state.autoRetry ? 'checked' : ''}></label><label class="atp-toggle-row"><span>跳过战斗动画</span><input type="checkbox" id="atp-cfg-skip-combat" ${state.skipCombat ? 'checked' : ''}></label><div class="atp-toggle-row"><span>到达此层停止</span><input type="number" id="atp-cfg-stop-floor" value="${state.stopOnFloor}" min="0" max="999"></div><div class="atp-section-title">✦ 天赋刷新</div><label class="atp-toggle-row"><span>灵石刷新天赋</span><input type="checkbox" id="atp-cfg-stone-refresh" ${state.stoneRefresh ? 'checked' : ''}></label><div class="atp-toggle-row"><span>最大刷新次数</span><input type="number" id="atp-cfg-refresh-max" value="${state.refreshMaxAttempts}" min="1" max="10"></div><div class="atp-section-title">✦ 天赋策略 (二选一)</div><div id="atp-strategy-container"></div><div id="atp-weight-container"></div><div class="atp-weight-reset" id="atp-weight-reset">恢复默认权重</div><div class="atp-section-title" style="margin-top:4px;">✦ 浏览器标题</div><label class="atp-toggle-row"><span>标题显示挑战层数</span><input type="checkbox" id="atp-cfg-show-floor" ${state.showFloorInTitle ? 'checked' : ''}></label><div class="atp-toggle-row"><span>标题模板</span><input type="text" id="atp-cfg-title-template" value="${state.titleTemplate.replace(/"/g, '&quot;')}" placeholder="天道塔挑战中【{floor}】层"></div><div class="atp-section-title">✦ 其他</div><label class="atp-toggle-row"><span>自动冥想</span><input type="checkbox" id="atp-cfg-auto-meditate" ${state.autoMeditate ? 'checked' : ''}></label><label class="atp-toggle-row"><span>屏幕常亮</span><input type="checkbox" id="atp-cfg-screen-always-on" ${state.screenAlwaysOn ? 'checked' : ''}></label></div><div class="atp-config-footer"><button class="atp-config-save-btn" id="atp-config-save">保 存 配 置</button></div>`;
         dialog.querySelector('#atp-strategy-container').appendChild(strategyToggle); dialog.querySelector('#atp-weight-container').appendChild(weightArea); overlay.appendChild(dialog); document.body.appendChild(overlay);
         ['special', 'normal'].forEach(type => { const h = document.getElementById(`atp-weight-header${type === 'normal' ? '-normal' : ''}`), b = document.getElementById(`atp-weight-body-${type}`), a = document.getElementById(`atp-weight-arrow${type === 'normal' ? '-normal' : ''}`); if (h) h.addEventListener('click', () => { const ex = b.classList.toggle('expanded'); if (a) a.textContent = ex ? '▾' : '▸'; }); });
         document.getElementById('atp-weight-reset').addEventListener('click', () => { [...WEIGHT_KEYS_SPECIAL, ...WEIGHT_KEYS_NORMAL].forEach(k => { const inp = overlay.querySelector(`#atp-weight-${k}`); if (inp) inp.value = DEFAULT_WEIGHTS[k]; }); });
-        document.getElementById('atp-cfg-theme-system').addEventListener('click', () => { currentTheme = 'system'; saveTheme(currentTheme); updateThemeStyle(); addLog('info', '主题切换: 跟随系统'); closeConfigModal(); });
         overlay.addEventListener('click', e => { if (e.target === overlay) closeConfigModal(); }); document.getElementById('atp-config-close').addEventListener('click', closeConfigModal);
         document.getElementById('atp-config-save').addEventListener('click', () => { const isDefault = btnDefault.classList.contains('active'); state.useDefaultStrategy = isDefault; state.autoRetry = document.getElementById('atp-cfg-auto-retry').checked; state.skipCombat = document.getElementById('atp-cfg-skip-combat').checked; state.stoneRefresh = document.getElementById('atp-cfg-stone-refresh').checked; state.refreshMaxAttempts = parseInt(document.getElementById('atp-cfg-refresh-max').value, 10) || 3; state.autoMeditate = document.getElementById('atp-cfg-auto-meditate').checked; state.stopOnFloor = parseInt(document.getElementById('atp-cfg-stop-floor').value, 10) || 0; state.showFloorInTitle = document.getElementById('atp-cfg-show-floor').checked; state.titleTemplate = document.getElementById('atp-cfg-title-template').value.trim() || '天道塔挑战中【{floor}】层'; state.screenAlwaysOn = document.getElementById('atp-cfg-screen-always-on').checked; syncWakeLock(); if (!isDefault) [...WEIGHT_KEYS_SPECIAL, ...WEIGHT_KEYS_NORMAL].forEach(k => { const inp = overlay.querySelector(`#atp-weight-${k}`); if (inp) state.weights[k] = parseInt(inp.value, 10) || DEFAULT_WEIGHTS[k]; }); saveConfig(); updateTitle(); addLog('info', `配置已保存 (${isDefault ? '默认策略' : '自配权重'})`); closeConfigModal(); });
         document.addEventListener('keydown', function esc(e) { if (e.key === 'Escape') { closeConfigModal(); document.removeEventListener('keydown', esc); } });
@@ -573,7 +565,7 @@
         const pos = loadJSON(POS_KEY);
         if (!isMobile() && pos) { container.style.left = clamp(pos.left, 0, innerWidth - 320) + 'px'; container.style.top = clamp(pos.top, 0, innerHeight - 40) + 'px'; container.style.right = 'auto'; container.style.bottom = 'auto'; container.style.transform = 'none'; }
         else { container.style.top = '50%'; container.style.right = '20px'; container.style.transform = 'translateY(-50%)'; }
-        container.innerHTML = `<div class="atp-panel" id="atp-panel"><div class="atp-header" id="atp-header"><span class="atp-title"><span class="atp-title-icon">⚔️</span><span>自动试炼</span></span><div class="atp-header-btns"><button class="atp-header-btn" id="atp-theme-btn" title="切换主题">🌓</button><button class="atp-header-btn" id="atp-config-btn" title="配置">⚙</button><button class="atp-header-btn" id="atp-collapse-btn" title="收起/展开">▼</button></div></div><div class="atp-body-wrap" id="atp-body-wrap"><div class="atp-body"><div class="atp-status-row"><span class="atp-status-dot idle" id="atp-status-dot"></span><span class="atp-status-text" id="atp-status-text">就绪 · 等待指令</span></div><div class="atp-stats"><div class="atp-stat-item"><div class="atp-stat-label">当前层数</div><div class="atp-stat-value gold" id="atp-current-floor">--</div></div><div class="atp-stat-item"><div class="atp-stat-label">历史最佳</div><div class="atp-stat-value" id="atp-best-floor">--</div></div></div><div class="atp-buffs-panel"><div class="atp-buffs-header" id="atp-buffs-header"><span class="atp-buffs-header-text">—— 天赋加成 ——</span><span class="atp-buffs-arrow" id="atp-buffs-arrow">▸</span></div><div class="atp-buffs-body" id="atp-buffs-body"><div class="atp-bonus-row" id="atp-bonus-row"><span class="atp-bonus-empty">暂无天赋加成数据</span></div><div class="atp-special-row" id="atp-special-row" style="display:none;"></div><div class="atp-buff-tags" id="atp-buffs-tags"></div></div></div><div class="atp-actions"><button class="atp-btn" id="atp-btn-start">开 始 试 炼</button><button class="atp-btn stop hidden" id="atp-btn-stop">停 止 试 炼</button></div><div class="atp-log" id="atp-log"></div></div></div></div>`;
+        container.innerHTML = `<div class="atp-panel" id="atp-panel"><div class="atp-header" id="atp-header"><span class="atp-title"><span class="atp-title-icon">⚔️</span><span>自动试炼 v1.6.7</span></span><div class="atp-header-btns"><button class="atp-header-btn" id="atp-config-btn" title="配置">⚙</button><button class="atp-header-btn" id="atp-collapse-btn" title="收起/展开">▼</button></div></div><div class="atp-body-wrap" id="atp-body-wrap"><div class="atp-body"><div class="atp-status-row"><span class="atp-status-dot idle" id="atp-status-dot"></span><span class="atp-status-text" id="atp-status-text">就绪 · 等待指令</span></div><div class="atp-stats"><div class="atp-stat-item"><div class="atp-stat-label">当前层数</div><div class="atp-stat-value gold" id="atp-current-floor">--</div></div><div class="atp-stat-item"><div class="atp-stat-label">历史最佳</div><div class="atp-stat-value" id="atp-best-floor">--</div></div></div><div class="atp-buffs-panel"><div class="atp-buffs-header" id="atp-buffs-header"><span class="atp-buffs-header-text">—— 天赋加成 ——</span><span class="atp-buffs-arrow" id="atp-buffs-arrow">▸</span></div><div class="atp-buffs-body" id="atp-buffs-body"><div class="atp-bonus-row" id="atp-bonus-row"><span class="atp-bonus-empty">暂无天赋加成数据</span></div><div class="atp-special-row" id="atp-special-row" style="display:none;"></div><div class="atp-buff-tags" id="atp-buffs-tags"></div></div></div><div class="atp-actions"><button class="atp-btn" id="atp-btn-start">开 始 试 炼</button><button class="atp-btn stop hidden" id="atp-btn-stop">停 止 试 炼</button></div><div class="atp-log" id="atp-log"></div></div></div></div>`;
         floatBtn = document.createElement('button'); floatBtn.className = 'atp-float-btn'; floatBtn.id = 'atp-float-btn'; floatBtn.title = '自动试炼塔'; floatBtn.textContent = '⚔️';
         document.body.appendChild(container); document.body.appendChild(floatBtn); cacheElements();
         headerEl = document.getElementById('atp-header');
@@ -588,7 +580,7 @@
         updateTitle(); updateBreathingLight();
     }
 
-    function bindEvents() { document.getElementById('atp-theme-btn').addEventListener('click', cycleTheme); document.getElementById('atp-config-btn').addEventListener('click', openConfigModal); document.getElementById('atp-btn-start').addEventListener('click', startTrial); document.getElementById('atp-btn-stop').addEventListener('click', stopTrial); }
-    function init() { if (document.getElementById('atp-container')) return; loadConfig(); syncWakeLock(); initThemeWatcher(); updateThemeStyle(); buildPanel(); bindEvents(); addLog('info', `自动试炼塔 v1.6.5 已就绪`); addLog('info', '盐值验证通过'); addLog('info', `策略已加载：${state.useDefaultStrategy ? '默认策略' : '自配权重'}`); updateAllStats(); }
+    function bindEvents() { document.getElementById('atp-config-btn').addEventListener('click', openConfigModal); document.getElementById('atp-btn-start').addEventListener('click', startTrial); document.getElementById('atp-btn-stop').addEventListener('click', stopTrial); }
+    function init() { if (document.getElementById('atp-container')) return; loadConfig(); syncWakeLock(); initThemeWatcher(); buildPanel(); bindEvents(); addLog('info', `自动试炼塔 v1.6.7 已就绪`); addLog('info', '盐值验证通过'); addLog('info', `策略已加载：${state.useDefaultStrategy ? '默认策略' : '自配权重'}`); updateAllStats(); }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
