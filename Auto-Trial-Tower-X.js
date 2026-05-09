@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         自动试炼塔[X]
 // @namespace    https://github.com/yourname/lingverse-trial-tower
-// @version      1.6.7
-// @description  智能天赋选择(暴击优先/特殊词条排序)，自动挑战/重试/冥想处理，浏览器标题显示层数，天赋权重自配，面板位置记忆，屏幕常亮，跟随页面主题
+// @version      1.7.0
+// @description  智能天赋选择(暴击优先/特殊词条排序)，自动挑战/重试/冥想处理，浏览器标题显示层数，到达目标层数自动重新开始，自动重试失败不再停止而是继续重试，天赋权重自配，面板位置记忆，屏幕常亮，跟随页面主题
 // @author       耀
 // @match        *://ling.muge.info/*
 // @grant        none
@@ -18,6 +18,8 @@
         console.log('[自动试炼塔] 盐值未获取，脚本未激活');
         return;
     }
+
+    // ==================== 常量与工具函数 ====================
 
     const STORAGE_KEY = 'atp_config';
     const POS_KEY = 'atp_position';
@@ -46,6 +48,8 @@
     const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 
     const DEFAULT_PAGE_TITLE = document.title || 'LingVerse';
+
+    // ==================== 天赋权重配置 ====================
 
     const DEFAULT_WEIGHTS = {
         '斩杀': 95, '不死': 100, '天怒': 90, '灵根共鸣': 85, '天道汲取': 80,
@@ -84,6 +88,8 @@
     }
 
     let _retainedBuffs = []; let _retainedStats = null;
+
+    // ==================== 动态主题样式 ====================
 
     const style = document.createElement('style');
     style.id = 'atp-theme-style';
@@ -248,6 +254,8 @@
         updateThemeStyle();
     }
 
+    // ==================== 状态管理 ====================
+
     const state = {
         isRunning: false, isPanelOpen: true, isCollapsed: false,
         currentFloor: 0, bestFloor: 0,
@@ -265,6 +273,8 @@
 
     let container, panel, floatBtn, headerEl, bodyWrap;
     let els = {};
+
+    // ==================== UI 辅助函数 ====================
 
     function updateTitle() {
         if (state.showFloorInTitle && state.isRunning) {
@@ -335,6 +345,8 @@
     async function apiPost(p, b) { if (typeof api === 'undefined') throw new Error('API 未就绪'); return api.post(p, b || {}); }
     function ensureSkipCombat(on) { try { localStorage.setItem('skip_combat', on ? 'true' : 'false'); if (typeof api !== 'undefined') api.post('/api/player/toggle-skip-combat', { enabled: !!on }).catch(() => {}); } catch (e) {} }
 
+    // ==================== 天赋选择逻辑 ====================
+
     const SPECIAL_ORDER = ['不死', '斩杀', '天怒', '灵根共鸣', '天道汲取'];
 
     function getCritPercent() { return Math.round((state.stats || {}).critBonus || 0); }
@@ -358,6 +370,8 @@
         const sym = buff.rarity === '传说' ? '⭐' : '◆', name = buff.name || '?', desc = buff.desc || '', weight = getBuffWeight(name, desc), prefix = hl ? '▶ ' : '';
         return `${prefix}${sym}[${name}] ${desc} <span style="color:${isDark ? '#6a6560' : '#8a8278'};">(${weight}分)</span>`;
     }
+
+    // ==================== 冥想处理 ====================
 
     function clickStopMeditate() {
         const stopBtn = document.querySelector('.btn-stop-meditate');
@@ -399,9 +413,77 @@
         } catch (e) { addLog('warn', '冥想处理异常'); }
     }
 
+    // ==================== 核心试炼循环 ====================
+
     async function trialLoop() {
+        const _MAX_RETRY_ERRORS = 5;
+        let _retryErrorCount = 0;
+
         while (state.isRunning && !state._stopRequested) {
-            if (state.stopOnFloor > 0 && state.currentFloor >= state.stopOnFloor) { addLog('gold', `已到达目标层数 ${state.stopOnFloor}，停止试炼`); break; }
+            if (state.stopOnFloor > 0 && state.currentFloor >= state.stopOnFloor) {
+                addLog('gold', `已到达目标层数 ${state.stopOnFloor}，重新开始试炼`);
+                state.currentFloor = 0;
+                state._refreshAttempts = 0;
+                updateTitle();
+
+                // 处理冥想状态
+                if (state.autoMeditate) {
+                    try {
+                        const sr = await apiGet('/api/game/meditate/status');
+                        if (sr && sr.code === 200 && sr.data && sr.data.isMeditating) {
+                            addLog('info', '检测到正在冥想，先收功...');
+                            if (clickStopMeditate()) {
+                                await wait(3000);
+                                addLog('success', '收功完成，准备重置...');
+                            } else {
+                                await apiPost('/api/game/meditate/stop');
+                                state._meditateActive = false;
+                                await wait(3000);
+                                addLog('success', '收功完成，准备重置...');
+                            }
+                            addLog('info', '等待2秒后发起重置...');
+                            await wait(2000);
+                        }
+                    } catch (e) {}
+                }
+
+                try {
+                    const startRes = await apiPost('/api/trial-tower/start', { useAdPoints: false });
+                    if (startRes && startRes.code === 200) {
+                        _retryErrorCount = 0;
+                        addLog('success', '试炼已重置，从头挑战');
+                        if (state.autoMeditate) {
+                            setTimeout(() => {
+                                if (clickStartMeditate()) {
+                                    addLog('success', '冥想已重新开启');
+                                }
+                            }, 3000);
+                        }
+                        await wait(800);
+                        continue;
+                    } else {
+                        _retryErrorCount++;
+                        addLog('error', '重置失败: ' + (startRes?.message || '') + ' (' + _retryErrorCount + '/' + _MAX_RETRY_ERRORS + ')');
+                        if (_retryErrorCount >= _MAX_RETRY_ERRORS) {
+                            addLog('error', '连续重置失败达上限，停止试炼');
+                            break;
+                        }
+                        addLog('info', '3秒后再次重试...');
+                        await wait(3000);
+                        continue;
+                    }
+                } catch (e) {
+                    _retryErrorCount++;
+                    addLog('error', '重置异常: ' + e.message + ' (' + _retryErrorCount + '/' + _MAX_RETRY_ERRORS + ')');
+                    if (_retryErrorCount >= _MAX_RETRY_ERRORS) {
+                        addLog('error', '连续重置失败达上限，停止试炼');
+                        break;
+                    }
+                    addLog('info', '3秒后再次重试...');
+                    await wait(3000);
+                    continue;
+                }
+            }
             let info;
             try { const res = await apiGet('/api/trial-tower/info'); if (!res || res.code !== 200) { addLog('error', '获取信息失败'); break; } info = res.data; } catch (e) { addLog('error', '网络错误'); await wait(2000); continue; }
             if (info.activeFloor) { state.currentFloor = info.activeFloor; if (info.activeFloor > state.bestFloor) state.bestFloor = info.activeFloor; updateTitle(); }
@@ -453,6 +535,7 @@
                 try {
                     const resetRes = await apiPost('/api/trial-tower/start', { useAdPoints: false });
                     if (resetRes && resetRes.code === 200) {
+                        _retryErrorCount = 0;
                         addLog('success', '试炼已重置');
                         if (state.autoMeditate) {
                             setTimeout(() => {
@@ -465,12 +548,34 @@
                         }
                         trialLoop(); return;
                     }
-                    else { addLog('error', '重试失败: ' + (resetRes?.message || '')); }
-                } catch (e) { addLog('error', '重试异常: ' + e.message); }
+                    else {
+                        _retryErrorCount++;
+                        addLog('error', '重试失败: ' + (resetRes?.message || '') + ' (' + _retryErrorCount + '/' + _MAX_RETRY_ERRORS + ')');
+                        if (_retryErrorCount >= _MAX_RETRY_ERRORS) {
+                            addLog('error', '连续重试失败达上限，停止试炼');
+                        } else {
+                            addLog('info', '3秒后再次重试...');
+                            await wait(3000);
+                            trialLoop(); return;
+                        }
+                    }
+                } catch (e) {
+                    _retryErrorCount++;
+                    addLog('error', '重试异常: ' + e.message + ' (' + _retryErrorCount + '/' + _MAX_RETRY_ERRORS + ')');
+                    if (_retryErrorCount >= _MAX_RETRY_ERRORS) {
+                        addLog('error', '连续重试失败达上限，停止试炼');
+                    } else {
+                        addLog('info', '3秒后再次重试...');
+                        await wait(3000);
+                        trialLoop(); return;
+                    }
+                }
             }
         }
         stopTrialInternal();
     }
+
+    // ==================== 启动/停止控制 ====================
 
     async function startTrial() {
         if (state.isRunning) return;
@@ -514,6 +619,8 @@
         } catch (e) {}
     }
 
+    // ==================== 配置弹窗 ====================
+
     function openConfigModal() {
         const existing = document.getElementById('atp-config-overlay'); if (existing) existing.remove();
         const overlay = document.createElement('div'); overlay.className = 'atp-config-overlay'; overlay.id = 'atp-config-overlay';
@@ -528,7 +635,7 @@
         const isDark = !document.documentElement.classList.contains('theme-light');
         const gold = isDark ? '#c9993a' : '#8b6914';
         const text3 = isDark ? '#6a6560' : '#8a8278';
-        dialog.innerHTML = `<div class="atp-config-header"><span class="atp-config-title">⚙ 自动试炼 · 配置</span><button class="atp-config-close" id="atp-config-close">✕</button></div><div class="atp-config-body"><div class="atp-section-title">✦ 试炼设置</div><label class="atp-toggle-row"><span>失败自动重试</span><input type="checkbox" id="atp-cfg-auto-retry" ${state.autoRetry ? 'checked' : ''}></label><label class="atp-toggle-row"><span>跳过战斗动画</span><input type="checkbox" id="atp-cfg-skip-combat" ${state.skipCombat ? 'checked' : ''}></label><div class="atp-toggle-row"><span>到达此层停止</span><input type="number" id="atp-cfg-stop-floor" value="${state.stopOnFloor}" min="0" max="999"></div><div class="atp-section-title">✦ 天赋刷新</div><label class="atp-toggle-row"><span>灵石刷新天赋</span><input type="checkbox" id="atp-cfg-stone-refresh" ${state.stoneRefresh ? 'checked' : ''}></label><div class="atp-toggle-row"><span>最大刷新次数</span><input type="number" id="atp-cfg-refresh-max" value="${state.refreshMaxAttempts}" min="1" max="10"></div><div class="atp-section-title">✦ 天赋策略 (二选一)</div><div id="atp-strategy-container"></div><div id="atp-weight-container"></div><div class="atp-weight-reset" id="atp-weight-reset">恢复默认权重</div><div class="atp-section-title" style="margin-top:4px;">✦ 浏览器标题</div><label class="atp-toggle-row"><span>标题显示挑战层数</span><input type="checkbox" id="atp-cfg-show-floor" ${state.showFloorInTitle ? 'checked' : ''}></label><div class="atp-toggle-row"><span>标题模板</span><input type="text" id="atp-cfg-title-template" value="${state.titleTemplate.replace(/"/g, '&quot;')}" placeholder="天道塔挑战中【{floor}】层"></div><div class="atp-section-title">✦ 其他</div><label class="atp-toggle-row"><span>自动冥想</span><input type="checkbox" id="atp-cfg-auto-meditate" ${state.autoMeditate ? 'checked' : ''}></label><label class="atp-toggle-row"><span>屏幕常亮</span><input type="checkbox" id="atp-cfg-screen-always-on" ${state.screenAlwaysOn ? 'checked' : ''}></label></div><div class="atp-config-footer"><button class="atp-config-save-btn" id="atp-config-save">保 存 配 置</button></div>`;
+        dialog.innerHTML = `<div class="atp-config-header"><span class="atp-config-title">⚙ 自动试炼 · 配置</span><button class="atp-config-close" id="atp-config-close">✕</button></div><div class="atp-config-body"><div class="atp-section-title">✦ 试炼设置</div><label class="atp-toggle-row"><span>失败自动重试</span><input type="checkbox" id="atp-cfg-auto-retry" ${state.autoRetry ? 'checked' : ''}></label><label class="atp-toggle-row"><span>跳过战斗动画</span><input type="checkbox" id="atp-cfg-skip-combat" ${state.skipCombat ? 'checked' : ''}></label><div class="atp-toggle-row"><span>到达此层重新开始</span><input type="number" id="atp-cfg-stop-floor" value="${state.stopOnFloor}" min="0" max="999"></div><div class="atp-section-title">✦ 天赋刷新</div><label class="atp-toggle-row"><span>灵石刷新天赋</span><input type="checkbox" id="atp-cfg-stone-refresh" ${state.stoneRefresh ? 'checked' : ''}></label><div class="atp-toggle-row"><span>最大刷新次数</span><input type="number" id="atp-cfg-refresh-max" value="${state.refreshMaxAttempts}" min="1" max="10"></div><div class="atp-section-title">✦ 天赋策略 (二选一)</div><div id="atp-strategy-container"></div><div id="atp-weight-container"></div><div class="atp-weight-reset" id="atp-weight-reset">恢复默认权重</div><div class="atp-section-title" style="margin-top:4px;">✦ 浏览器标题</div><label class="atp-toggle-row"><span>标题显示挑战层数</span><input type="checkbox" id="atp-cfg-show-floor" ${state.showFloorInTitle ? 'checked' : ''}></label><div class="atp-toggle-row"><span>标题模板</span><input type="text" id="atp-cfg-title-template" value="${state.titleTemplate.replace(/"/g, '&quot;')}" placeholder="天道塔挑战中【{floor}】层"></div><div class="atp-section-title">✦ 其他</div><label class="atp-toggle-row"><span>自动冥想</span><input type="checkbox" id="atp-cfg-auto-meditate" ${state.autoMeditate ? 'checked' : ''}></label><label class="atp-toggle-row"><span>屏幕常亮</span><input type="checkbox" id="atp-cfg-screen-always-on" ${state.screenAlwaysOn ? 'checked' : ''}></label></div><div class="atp-config-footer"><button class="atp-config-save-btn" id="atp-config-save">保 存 配 置</button></div>`;
         dialog.querySelector('#atp-strategy-container').appendChild(strategyToggle); dialog.querySelector('#atp-weight-container').appendChild(weightArea); overlay.appendChild(dialog); document.body.appendChild(overlay);
         ['special', 'normal'].forEach(type => { const h = document.getElementById(`atp-weight-header${type === 'normal' ? '-normal' : ''}`), b = document.getElementById(`atp-weight-body-${type}`), a = document.getElementById(`atp-weight-arrow${type === 'normal' ? '-normal' : ''}`); if (h) h.addEventListener('click', () => { const ex = b.classList.toggle('expanded'); if (a) a.textContent = ex ? '▾' : '▸'; }); });
         document.getElementById('atp-weight-reset').addEventListener('click', () => { [...WEIGHT_KEYS_SPECIAL, ...WEIGHT_KEYS_NORMAL].forEach(k => { const inp = overlay.querySelector(`#atp-weight-${k}`); if (inp) inp.value = DEFAULT_WEIGHTS[k]; }); });
@@ -537,6 +644,8 @@
         document.addEventListener('keydown', function esc(e) { if (e.key === 'Escape') { closeConfigModal(); document.removeEventListener('keydown', esc); } });
     }
     function closeConfigModal() { const o = document.getElementById('atp-config-overlay'); if (o) o.remove(); }
+
+    // ==================== 拖拽相关 ====================
 
     function clamp(val, min, max) { return Math.max(min, Math.min(max, val)); }
 
@@ -560,12 +669,14 @@
         return { wasDragged: () => m, resetMoved: () => { m = false; } };
     }
 
+    // ==================== 面板构建 ====================
+
     function buildPanel() {
         container = document.createElement('div'); container.className = 'atp-container'; container.id = 'atp-container';
         const pos = loadJSON(POS_KEY);
         if (!isMobile() && pos) { container.style.left = clamp(pos.left, 0, innerWidth - 320) + 'px'; container.style.top = clamp(pos.top, 0, innerHeight - 40) + 'px'; container.style.right = 'auto'; container.style.bottom = 'auto'; container.style.transform = 'none'; }
         else { container.style.top = '50%'; container.style.right = '20px'; container.style.transform = 'translateY(-50%)'; }
-        container.innerHTML = `<div class="atp-panel" id="atp-panel"><div class="atp-header" id="atp-header"><span class="atp-title"><span class="atp-title-icon">⚔️</span><span>自动试炼 v1.6.7</span></span><div class="atp-header-btns"><button class="atp-header-btn" id="atp-config-btn" title="配置">⚙</button><button class="atp-header-btn" id="atp-collapse-btn" title="收起/展开">▼</button></div></div><div class="atp-body-wrap" id="atp-body-wrap"><div class="atp-body"><div class="atp-status-row"><span class="atp-status-dot idle" id="atp-status-dot"></span><span class="atp-status-text" id="atp-status-text">就绪 · 等待指令</span></div><div class="atp-stats"><div class="atp-stat-item"><div class="atp-stat-label">当前层数</div><div class="atp-stat-value gold" id="atp-current-floor">--</div></div><div class="atp-stat-item"><div class="atp-stat-label">历史最佳</div><div class="atp-stat-value" id="atp-best-floor">--</div></div></div><div class="atp-buffs-panel"><div class="atp-buffs-header" id="atp-buffs-header"><span class="atp-buffs-header-text">—— 天赋加成 ——</span><span class="atp-buffs-arrow" id="atp-buffs-arrow">▸</span></div><div class="atp-buffs-body" id="atp-buffs-body"><div class="atp-bonus-row" id="atp-bonus-row"><span class="atp-bonus-empty">暂无天赋加成数据</span></div><div class="atp-special-row" id="atp-special-row" style="display:none;"></div><div class="atp-buff-tags" id="atp-buffs-tags"></div></div></div><div class="atp-actions"><button class="atp-btn" id="atp-btn-start">开 始 试 炼</button><button class="atp-btn stop hidden" id="atp-btn-stop">停 止 试 炼</button></div><div class="atp-log" id="atp-log"></div></div></div></div>`;
+        container.innerHTML = `<div class="atp-panel" id="atp-panel"><div class="atp-header" id="atp-header"><span class="atp-title"><span class="atp-title-icon">⚔️</span><span>自动试炼 v1.7.0</span></span><div class="atp-header-btns"><button class="atp-header-btn" id="atp-config-btn" title="配置">⚙</button><button class="atp-header-btn" id="atp-collapse-btn" title="收起/展开">▼</button></div></div><div class="atp-body-wrap" id="atp-body-wrap"><div class="atp-body"><div class="atp-status-row"><span class="atp-status-dot idle" id="atp-status-dot"></span><span class="atp-status-text" id="atp-status-text">就绪 · 等待指令</span></div><div class="atp-stats"><div class="atp-stat-item"><div class="atp-stat-label">当前层数</div><div class="atp-stat-value gold" id="atp-current-floor">--</div></div><div class="atp-stat-item"><div class="atp-stat-label">历史最佳</div><div class="atp-stat-value" id="atp-best-floor">--</div></div></div><div class="atp-buffs-panel"><div class="atp-buffs-header" id="atp-buffs-header"><span class="atp-buffs-header-text">—— 天赋加成 ——</span><span class="atp-buffs-arrow" id="atp-buffs-arrow">▸</span></div><div class="atp-buffs-body" id="atp-buffs-body"><div class="atp-bonus-row" id="atp-bonus-row"><span class="atp-bonus-empty">暂无天赋加成数据</span></div><div class="atp-special-row" id="atp-special-row" style="display:none;"></div><div class="atp-buff-tags" id="atp-buffs-tags"></div></div></div><div class="atp-actions"><button class="atp-btn" id="atp-btn-start">开 始 试 炼</button><button class="atp-btn stop hidden" id="atp-btn-stop">停 止 试 炼</button></div><div class="atp-log" id="atp-log"></div></div></div></div>`;
         floatBtn = document.createElement('button'); floatBtn.className = 'atp-float-btn'; floatBtn.id = 'atp-float-btn'; floatBtn.title = '自动试炼塔'; floatBtn.textContent = '⚔️';
         document.body.appendChild(container); document.body.appendChild(floatBtn); cacheElements();
         headerEl = document.getElementById('atp-header');
@@ -581,6 +692,6 @@
     }
 
     function bindEvents() { document.getElementById('atp-config-btn').addEventListener('click', openConfigModal); document.getElementById('atp-btn-start').addEventListener('click', startTrial); document.getElementById('atp-btn-stop').addEventListener('click', stopTrial); }
-    function init() { if (document.getElementById('atp-container')) return; loadConfig(); syncWakeLock(); initThemeWatcher(); buildPanel(); bindEvents(); addLog('info', `自动试炼塔 v1.6.7 已就绪`); addLog('info', '盐值验证通过'); addLog('info', `策略已加载：${state.useDefaultStrategy ? '默认策略' : '自配权重'}`); updateAllStats(); }
+    function init() { if (document.getElementById('atp-container')) return; loadConfig(); syncWakeLock(); initThemeWatcher(); buildPanel(); bindEvents(); addLog('info', `自动试炼塔 v1.7.0 已就绪`); addLog('info', '盐值验证通过'); addLog('info', `策略已加载：${state.useDefaultStrategy ? '默认策略' : '自配权重'}`); updateAllStats(); }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
