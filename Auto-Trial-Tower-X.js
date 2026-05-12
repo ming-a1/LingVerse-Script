@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         自动试炼塔[X]
 // @namespace    https://github.com/yourname/lingverse-trial-tower
-// @version      1.7.5
-// @description  智能天赋选择(暴击优先/特殊词条排序)，自动挑战/重试/冥想处理，天赋权重自配，屏幕常亮，跟随页面主题
+// @version      1.7.3
+// @description  智能天赋选择(暴击优先/特殊词条排序)，自动挑战/重试/三层冥想保护，浏览器标题显示层数，到达目标层数自动重新开始，重试失败自动处理冥想并继续，withTimeout内存泄漏修复，请求限流保护，天赋权重自配，面板位置记忆，屏幕常亮，跟随页面主题
 // @author       耀
 // @match        *://ling.muge.info/*
 // @grant        none
@@ -103,8 +103,6 @@
 
     let _retryErrorCount = 0;
     const _MAX_RETRY_ERRORS = 5;
-
-    const SPECIAL_ORDER = ['不死', '斩杀', '天怒', '灵根共鸣', '天道汲取'];
 
     // ==================== 动态主题样式 ====================
 
@@ -236,8 +234,8 @@
         .atp-float-btn { position: fixed; width: 44px; height: 44px; border-radius: 50%; background: ${isDark ? 'linear-gradient(135deg, rgba(201,153,58,0.2) 0%, rgba(201,153,58,0.1) 100%)' : 'linear-gradient(135deg, rgba(180,140,50,0.18) 0%, rgba(180,140,50,0.08) 100%)'}; border: 2px solid ${border}; color: ${gold}; font-size: 20px; cursor: grab; z-index: 99998; display: flex; align-items: center; justify-content: center; user-select: none; -webkit-user-select: none; transition: box-shadow 0.5s, border-color 0.5s; touch-action: none; -webkit-touch-callout: none; }
         .atp-float-btn.breathing { animation: atp-float-breathe 2s ease-in-out infinite; }
         @keyframes atp-float-breathe {
-            0%,100% { box-shadow: 0 0 12px rgba(102,187,106,0.4), 0 0 24px rgba(102,187,106,0.15); border-color: #66bb6a; }
-            50%     { box-shadow: 0 0 24px rgba(102,187,106,0.8), 0 0 48px rgba(102,187,106,0.35); border-color: #81c784; }
+            0%,100% { box-shadow: 0 0 8px ${isDark ? 'rgba(201,153,58,0.2)' : 'rgba(180,140,50,0.2)'}; border-color: ${border}; }
+            50%     { box-shadow: 0 0 20px ${isDark ? 'rgba(201,153,58,0.5)' : 'rgba(180,140,50,0.5)'}, 0 0 40px ${isDark ? 'rgba(201,153,58,0.2)' : 'rgba(180,140,50,0.2)'}; border-color: ${isDark ? 'rgba(201,153,58,0.85)' : 'rgba(180,140,50,0.9)'}; }
         }
 
         .hidden { display: none !important; }
@@ -364,6 +362,8 @@
 
     // ==================== 天赋选择逻辑 ====================
 
+    const SPECIAL_ORDER = ['不死', '斩杀', '天怒', '灵根共鸣', '天道汲取'];
+
     function getCritPercent() { return Math.round((state.stats || {}).critBonus || 0); }
     function isCritFull() { return getCritPercent() >= 100; }
 
@@ -390,7 +390,7 @@
 
     function clickStopMeditate() {
         const stopBtn = document.querySelector('.btn-stop-meditate');
-        if (stopBtn && stopBtn.offsetParent !== null && !stopBtn.disabled) {
+        if (stopBtn) {
             stopBtn.click();
             state._meditateActive = false;
             return true;
@@ -408,86 +408,96 @@
         return false;
     }
 
-    // ==================== 冥想弹窗 + 收功 统一处理 ====================
-
-    async function ensureNotMeditating(source) {
-        // --- 第1层：检查游戏确认弹窗（必须可见） ---
-        const dialogBtn = document.getElementById('gameDialogConfirmBtn');
-        if (dialogBtn && dialogBtn.offsetParent !== null) {
-            dialogBtn.click();
-            addLog('info', `[${source}] 已点击确认弹窗`);
-            await wait(3000);
-            state._meditateActive = false;
-            return true;
-        }
-
-        // --- 第2层：检查收功按钮（必须可见且未被禁用） ---
-        const stopBtn = document.querySelector('.btn-stop-meditate');
-        if (stopBtn && stopBtn.offsetParent !== null && !stopBtn.disabled) {
-            addLog('info', `[${source}] 检测到收功按钮，点击收功...`);
-            stopBtn.click();
-            // 点击后可能弹出确认弹窗
-            await wait(500);
-            const retryBtn = document.getElementById('gameDialogConfirmBtn');
-            if (retryBtn && retryBtn.offsetParent !== null) {
-                retryBtn.click();
-                addLog('info', `[${source}] 收功后弹窗已确认`);
-            }
-            await wait(3000);
-            state._meditateActive = false;
-            addLog('success', '收功完成');
-            return true;
-        }
-
-        // --- 第3层：API 兜底 ---
-        if (!state.autoMeditate && source !== '错误回退') return false;
-
+    async function handleMeditationBeforeRetry(source) {
         try {
             const sr = await apiGet('/api/game/meditate/status');
-            if (sr?.code === 200 && sr.data?.isMeditating) {
-                addLog('info', `[${source}] API 确认冥想中，收功...`);
-                try { await apiPost('/api/game/meditate/stop'); } catch (e) {}
-                await wait(500);
-                const retryBtn2 = document.getElementById('gameDialogConfirmBtn');
-                if (retryBtn2 && retryBtn2.offsetParent !== null) {
-                    retryBtn2.click();
-                    addLog('info', `[${source}] API 收功后弹窗已确认`);
+            if (sr && sr.code === 200 && sr.data && sr.data.isMeditating) {
+                addLog('info', `[${source}] 检测到正在冥想，先收功...`);
+                if (clickStopMeditate()) {
+                    await wait(3000);
+                    addLog('success', '收功完成，准备重试...');
+                } else {
+                    await apiPost('/api/game/meditate/stop');
+                    state._meditateActive = false;
+                    await wait(3000);
+                    addLog('success', '收功完成，准备重试...');
                 }
-                await wait(3000);
-                state._meditateActive = false;
-                addLog('success', '收功完成');
-                return true;
+                addLog('info', '等待2秒后发起重置...');
+                await wait(2000);
             }
-        } catch (e) { addLog('warn', '冥想状态检查异常: ' + e.message); }
+        } catch (e) { addLog('warn', '冥想处理异常: ' + e.message); }
+    }
 
-        return false;
+    async function handleMeditationFallback() {
+        addLog('info', '检测到冥想中，尝试收功...');
+        if (clickStopMeditate()) {
+            await wait(3000);
+        } else {
+            try { await apiPost('/api/game/meditate/stop'); } catch(e2) {}
+            state._meditateActive = false;
+            await wait(3000);
+        }
+        addLog('success', '收功完成，重试操作...');
+        await wait(2000);
     }
 
     // ==================== 核心试炼循环 ====================
 
     async function trialLoop() {
         while (state.isRunning && !state._stopRequested) {
+            await wait(1000);
+
             if (state.stopOnFloor > 0 && state.currentFloor >= state.stopOnFloor) {
                 addLog('gold', `已到达目标层数 ${state.stopOnFloor}，重新开始试炼`);
                 state.currentFloor = 0;
                 state._refreshAttempts = 0;
                 updateTitle();
 
-                await ensureNotMeditating('目标层数重置');
+                if (state.autoMeditate) {
+                    await handleMeditationBeforeRetry('目标层数重置');
+                }
 
-                const ok = await attemptTrialReset();
-                if (ok) {
-                    if (state.autoMeditate) {
-                        setTimeout(() => {
-                            if (clickStartMeditate()) addLog('success', '冥想已重新开启');
-                        }, 3000);
+                try {
+                    const startRes = await apiPost('/api/trial-tower/start', { useAdPoints: false });
+                    if (startRes && startRes.code === 200) {
+                        _retryErrorCount = 0;
+                        addLog('success', '试炼已重置，从头挑战');
+                        if (state.autoMeditate) {
+                            setTimeout(() => {
+                                if (clickStartMeditate()) {
+                                    addLog('success', '冥想已重新开启');
+                                }
+                            }, 3000);
+                        }
+                        continue;
+                    } else {
+                        const errMsg = startRes?.message || '';
+                        _retryErrorCount++;
+                        addLog('error', '重置失败: ' + errMsg + ' (' + _retryErrorCount + '/' + _MAX_RETRY_ERRORS + ')');
+                        if (errMsg.includes('冥想')) {
+                            await handleMeditationFallback();
+                            continue;
+                        }
+                        if (_retryErrorCount >= _MAX_RETRY_ERRORS) {
+                            addLog('error', '连续重置失败达上限，停止试炼');
+                            break;
+                        }
+                        addLog('info', '3秒后再次重试...');
+                        await wait(3000);
+                        continue;
                     }
+                } catch (e) {
+                    _retryErrorCount++;
+                    addLog('error', '重置异常: ' + e.message + ' (' + _retryErrorCount + '/' + _MAX_RETRY_ERRORS + ')');
+                    if (_retryErrorCount >= _MAX_RETRY_ERRORS) {
+                        addLog('error', '连续重置失败达上限，停止试炼');
+                        break;
+                    }
+                    addLog('info', '3秒后再次重试...');
+                    await wait(3000);
                     continue;
-                } else {
-                    break;
                 }
             }
-
             let info;
             try { const res = await apiGet('/api/trial-tower/info'); if (!res || res.code !== 200) { addLog('error', '获取信息失败'); break; } info = res.data; } catch (e) { addLog('error', '网络错误'); await wait(2000); continue; }
             if (info.activeFloor) { state.currentFloor = info.activeFloor; if (info.activeFloor > state.bestFloor) state.bestFloor = info.activeFloor; updateTitle(); }
@@ -503,34 +513,11 @@
             }
 
             if (info.hasActiveTrial) { updateBuffData(info); updateAllStats(); addLog('info', `⚔️ 第${info.activeFloor}层 战斗开始`); setStatus('running', `第${info.activeFloor}层战斗中...`);
-                try { const fightRes = await apiPost('/api/trial-tower/fight'); if (!fightRes || fightRes.code !== 200) { addLog('error', '战斗失败'); break; } if (fightRes.data.victory) { addLog('success', `✅ 第${info.activeFloor}层 胜利!`); updateAllStats(); } else {
-                    addLog('error', `❌ 第${info.activeFloor}层 战败`);
-                    updateAllStats();
-                    if (!state.autoRetry) break;
-                    addLog('info', '3秒后自动重试...');
-                    await wait(2000);
-                    if (!state.isRunning || state._stopRequested) break;
-                    state.currentFloor = 0;
-                    state._refreshAttempts = 0;
-                    updateTitle();
-                    await ensureNotMeditating('自动重试');
-                    const ok = await attemptTrialReset();
-                    if (ok) {
-                        if (state.autoMeditate) {
-                            setTimeout(() => {
-                                if (clickStartMeditate()) addLog('success', '冥想已重新开启');
-                            }, 3000);
-                        }
-                        continue;
-                    } else {
-                        break;
-                    }
-                } } catch (e) { addLog('error', '战斗异常'); await wait(2000); continue; }
+                try { const fightRes = await apiPost('/api/trial-tower/fight'); if (!fightRes || fightRes.code !== 200) { addLog('error', '战斗失败'); break; } if (fightRes.data.victory) { addLog('success', `✅ 第${info.activeFloor}层 胜利!`); updateAllStats(); } else { addLog('error', `❌ 第${info.activeFloor}层 战败`); updateAllStats(); break; } } catch (e) { addLog('error', '战斗异常'); await wait(2000); continue; }
                 continue;
             }
 
             addLog('info', '🚀 开始新试炼');
-            await ensureNotMeditating('开始前检查');
             try {
                 const startRes = await apiPost('/api/trial-tower/start', { useAdPoints: false });
                 if (startRes && startRes.code === 200) {
@@ -542,7 +529,7 @@
                     const errMsg = startRes?.message || '';
                     addLog('error', '开始失败: ' + errMsg);
                     if (errMsg.includes('冥想')) {
-                        await ensureNotMeditating('错误回退');
+                        await handleMeditationFallback();
                         continue;
                     }
                     break;
@@ -555,41 +542,69 @@
         }
         _retainedBuffs = [...state.buffs]; _retainedStats = state.stats ? { ...state.stats } : null;
         addLog('gold', '━━━━━━━━━━━━━━━━━━━━'); addLog('gold', `试炼结束 · ${state.currentFloor}层 · 最佳${state.bestFloor}层`);
-        stopTrialInternal();
-    }
 
-    // ==================== 重置试炼 ====================
+        if (state.autoRetry && state.isRunning && !state._stopRequested) {
+            addLog('info', '3秒后自动重试...'); await wait(3000);
+            if (state.isRunning && !state._stopRequested) {
+                addLog('info', '━━━ 自动重试 ━━━'); state.currentFloor = 0; state._refreshAttempts = 0; updateTitle();
 
-    async function attemptTrialReset() {
-        for (let attempt = 0; attempt < 2; attempt++) {
-            if (!state.isRunning || state._stopRequested) return false;
+                await handleMeditationBeforeRetry('自动重试');
 
-            await ensureNotMeditating('重置前检查');
-
-            try {
-                const res = await apiPost('/api/trial-tower/start', { useAdPoints: false });
-                if (res && res.code === 200) {
-                    _retryErrorCount = 0;
-                    addLog('success', '试炼已重置');
-                    return true;
+                try {
+                    const resetRes = await apiPost('/api/trial-tower/start', { useAdPoints: false });
+                    if (resetRes && resetRes.code === 200) {
+                        _retryErrorCount = 0;
+                        addLog('success', '试炼已重置');
+                        if (state.autoMeditate) {
+                            setTimeout(() => {
+                                if (clickStartMeditate()) {
+                                    addLog('success', '冥想已重新开启');
+                                } else {
+                                    addLog('warn', '未找到冥想按钮，冥想开启失败');
+                                }
+                            }, 3000);
+                        }
+                        trialLoop(); return;
+                    }
+                    else {
+                        const errMsg = resetRes?.message || '';
+                        _retryErrorCount++;
+                        addLog('error', '重试失败: ' + errMsg + ' (' + _retryErrorCount + '/' + _MAX_RETRY_ERRORS + ')');
+                        if (errMsg.includes('冥想')) {
+                            await handleMeditationFallback();
+                            if (_retryErrorCount >= _MAX_RETRY_ERRORS) {
+                                addLog('error', '连续重试失败达上限，停止试炼');
+                                stopTrialInternal();
+                                return;
+                            }
+                            addLog('info', '3秒后再次重试...');
+                            await wait(3000);
+                            trialLoop(); return;
+                        }
+                        if (_retryErrorCount >= _MAX_RETRY_ERRORS) {
+                            addLog('error', '连续重试失败达上限，停止试炼');
+                            stopTrialInternal();
+                            return;
+                        }
+                        addLog('info', '3秒后再次重试...');
+                        await wait(3000);
+                        trialLoop(); return;
+                    }
+                } catch (e) {
+                    _retryErrorCount++;
+                    addLog('error', '重试异常: ' + e.message + ' (' + _retryErrorCount + '/' + _MAX_RETRY_ERRORS + ')');
+                    if (_retryErrorCount >= _MAX_RETRY_ERRORS) {
+                        addLog('error', '连续重试失败达上限，停止试炼');
+                        stopTrialInternal();
+                        return;
+                    }
+                    addLog('info', '3秒后再次重试...');
+                    await wait(3000);
+                    trialLoop(); return;
                 }
-                const errMsg = res?.message || '';
-                _retryErrorCount++;
-                addLog('error', `重试失败: ${errMsg} (${_retryErrorCount}/${_MAX_RETRY_ERRORS})`);
-
-                if (errMsg.includes('冥想')) {
-                    await ensureNotMeditating('错误回退');
-                    _retryErrorCount = 0;
-                    return true;
-                }
-            } catch (e) {
-                _retryErrorCount++;
-                addLog('error', `重试异常: ${e.message} (${_retryErrorCount}/${_MAX_RETRY_ERRORS})`);
             }
-            if (_retryErrorCount >= _MAX_RETRY_ERRORS) { addLog('error', '连续失败达上限'); return false; }
-            if (attempt < 1) { addLog('info', '2秒后再次重试...'); await wait(2000); }
         }
-        return false;
+        stopTrialInternal();
     }
 
     // ==================== 启动/停止控制 ====================
@@ -601,7 +616,9 @@
         if (_retainedBuffs.length > 0) { state.buffs = [..._retainedBuffs]; state.stats = _retainedStats ? { ..._retainedStats } : null; }
         updateAllStats(); toggleButtons(true); setStatus('running', '启动中...'); updateBreathingLight(); updateTitle();
 
-        await ensureNotMeditating('启动');
+        if (state.autoMeditate) {
+            await handleMeditationBeforeRetry('启动');
+        }
 
         if (state.skipCombat) { ensureSkipCombat(true); addLog('info', '跳过战斗: 开'); }
         addLog('gold', `━━━ 自动试炼开始 (${state.useDefaultStrategy ? '默认策略' : '自配权重'}) ━━━`);
@@ -694,7 +711,7 @@
         const pos = loadJSON(POS_KEY);
         if (!isMobile() && pos) { container.style.left = clamp(pos.left, 0, innerWidth - 320) + 'px'; container.style.top = clamp(pos.top, 0, innerHeight - 40) + 'px'; container.style.right = 'auto'; container.style.bottom = 'auto'; container.style.transform = 'none'; }
         else { container.style.top = '50%'; container.style.right = '20px'; container.style.transform = 'translateY(-50%)'; }
-        container.innerHTML = `<div class="atp-panel" id="atp-panel"><div class="atp-header" id="atp-header"><span class="atp-title"><span class="atp-title-icon">⚔️</span><span>自动试炼 v1.7.5</span></span><div class="atp-header-btns"><button class="atp-header-btn" id="atp-config-btn" title="配置">⚙</button><button class="atp-header-btn" id="atp-collapse-btn" title="收起/展开">▼</button></div></div><div class="atp-body-wrap" id="atp-body-wrap"><div class="atp-body"><div class="atp-status-row"><span class="atp-status-dot idle" id="atp-status-dot"></span><span class="atp-status-text" id="atp-status-text">就绪 · 等待指令</span></div><div class="atp-stats"><div class="atp-stat-item"><div class="atp-stat-label">当前层数</div><div class="atp-stat-value gold" id="atp-current-floor">--</div></div><div class="atp-stat-item"><div class="atp-stat-label">历史最佳</div><div class="atp-stat-value" id="atp-best-floor">--</div></div></div><div class="atp-buffs-panel"><div class="atp-buffs-header" id="atp-buffs-header"><span class="atp-buffs-header-text">—— 天赋加成 ——</span><span class="atp-buffs-arrow" id="atp-buffs-arrow">▸</span></div><div class="atp-buffs-body" id="atp-buffs-body"><div class="atp-bonus-row" id="atp-bonus-row"><span class="atp-bonus-empty">暂无天赋加成数据</span></div><div class="atp-special-row" id="atp-special-row" style="display:none;"></div><div class="atp-buff-tags" id="atp-buffs-tags"></div></div></div><div class="atp-actions"><button class="atp-btn" id="atp-btn-start">开 始 试 炼</button><button class="atp-btn stop hidden" id="atp-btn-stop">停 止 试 炼</button></div><div class="atp-log" id="atp-log"></div></div></div></div>`;
+        container.innerHTML = `<div class="atp-panel" id="atp-panel"><div class="atp-header" id="atp-header"><span class="atp-title"><span class="atp-title-icon">⚔️</span><span>自动试炼 v1.7.3</span></span><div class="atp-header-btns"><button class="atp-header-btn" id="atp-config-btn" title="配置">⚙</button><button class="atp-header-btn" id="atp-collapse-btn" title="收起/展开">▼</button></div></div><div class="atp-body-wrap" id="atp-body-wrap"><div class="atp-body"><div class="atp-status-row"><span class="atp-status-dot idle" id="atp-status-dot"></span><span class="atp-status-text" id="atp-status-text">就绪 · 等待指令</span></div><div class="atp-stats"><div class="atp-stat-item"><div class="atp-stat-label">当前层数</div><div class="atp-stat-value gold" id="atp-current-floor">--</div></div><div class="atp-stat-item"><div class="atp-stat-label">历史最佳</div><div class="atp-stat-value" id="atp-best-floor">--</div></div></div><div class="atp-buffs-panel"><div class="atp-buffs-header" id="atp-buffs-header"><span class="atp-buffs-header-text">—— 天赋加成 ——</span><span class="atp-buffs-arrow" id="atp-buffs-arrow">▸</span></div><div class="atp-buffs-body" id="atp-buffs-body"><div class="atp-bonus-row" id="atp-bonus-row"><span class="atp-bonus-empty">暂无天赋加成数据</span></div><div class="atp-special-row" id="atp-special-row" style="display:none;"></div><div class="atp-buff-tags" id="atp-buffs-tags"></div></div></div><div class="atp-actions"><button class="atp-btn" id="atp-btn-start">开 始 试 炼</button><button class="atp-btn stop hidden" id="atp-btn-stop">停 止 试 炼</button></div><div class="atp-log" id="atp-log"></div></div></div></div>`;
         floatBtn = document.createElement('button'); floatBtn.className = 'atp-float-btn'; floatBtn.id = 'atp-float-btn'; floatBtn.title = '自动试炼塔'; floatBtn.textContent = '⚔️';
         document.body.appendChild(container); document.body.appendChild(floatBtn); cacheElements();
         headerEl = document.getElementById('atp-header');
@@ -710,6 +727,6 @@
     }
 
     function bindEvents() { document.getElementById('atp-config-btn').addEventListener('click', openConfigModal); document.getElementById('atp-btn-start').addEventListener('click', startTrial); document.getElementById('atp-btn-stop').addEventListener('click', stopTrial); }
-    function init() { if (document.getElementById('atp-container')) return; loadConfig(); syncWakeLock(); initThemeWatcher(); buildPanel(); bindEvents(); addLog('info', `自动试炼塔 v1.7.5 已就绪`); addLog('info', '盐值验证通过'); addLog('info', `策略已加载：${state.useDefaultStrategy ? '默认策略' : '自配权重'}`); updateAllStats(); }
+    function init() { if (document.getElementById('atp-container')) return; loadConfig(); syncWakeLock(); initThemeWatcher(); buildPanel(); bindEvents(); addLog('info', `自动试炼塔 v1.7.3 已就绪`); addLog('info', '盐值验证通过'); addLog('info', `策略已加载：${state.useDefaultStrategy ? '默认策略' : '自配权重'}`); updateAllStats(); }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
