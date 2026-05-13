@@ -2,13 +2,13 @@
 // @name         自动试炼塔[X]
 // @namespace    https://github.com/yourname/lingverse-trial-tower
 // @version      1.7.8
-// @description  智能天赋选择(暴击优先/特殊词条排序)，自动挑战/重试/冥想处理，天赋权重自配，屏幕常亮，跟随页面主题，请求节流可配，面板置顶，PC端收起状态记忆
+// @description  智能天赋选择(暴击优先/特殊词条排序)，自动挑战/重试/冥想处理，天赋权重自配，屏幕常亮，跟随页面主题，请求节流可配，面板置顶
 // @author       耀
 // @match        *://ling.muge.info/*
 // @grant        none
 // @run-at       document-end
-// @downloadURL  https://v6.gh-proxy.org/https://raw.githubusercontent.com/ming-a1/LingVerse-Script/main/Auto-Trial-Tower-X.js
-// @updateURL    https://v6.gh-proxy.org/https://raw.githubusercontent.com/ming-a1/LingVerse-Script/main/Auto-Trial-Tower-X.js
+// @downloadURL  https://gh-proxy.org/https://raw.githubusercontent.com/ming-a1/LingVerse-Script/main/Auto-Trial-Tower-X.js
+// @updateURL    https://gh-proxy.org/https://raw.githubusercontent.com/ming-a1/LingVerse-Script/main/Auto-Trial-Tower-X.js
 // ==/UserScript==
 
 (function () {
@@ -1112,7 +1112,7 @@
         return { wasDragged: () => m, resetMoved: () => { m = false; } };
     }
 
-    // ==================== 面板构建（修复 bodyWrap 未定义错误，增加PC端收起状态记忆） ====================
+    // ==================== 面板构建 ====================
 
     function buildPanel() {
         _dragCleanups.forEach(fn => fn());
@@ -1126,7 +1126,7 @@
         floatBtn = document.createElement('button'); floatBtn.className = 'atp-float-btn'; floatBtn.id = 'atp-float-btn'; floatBtn.title = '自动试炼塔'; floatBtn.textContent = '⚔️';
         document.body.appendChild(container); document.body.appendChild(floatBtn); cacheElements();
 
-        // 关键：在 PC 端折叠状态恢复之前，先获取 bodyWrap 元素
+        // 先获取 bodyWrap，再恢复折叠状态，避免 undefined
         headerEl = document.getElementById('atp-header');
         bodyWrap = document.getElementById('atp-body-wrap');
 
@@ -1158,7 +1158,6 @@
                 state.isPanelOpen = false; 
                 saveCollapsed(true); 
             } else { 
-                // PC 端：切换状态 + 记忆
                 state.isCollapsed = !state.isCollapsed; 
                 savePcCollapsed(state.isCollapsed); 
                 if (state.isCollapsed) { 
