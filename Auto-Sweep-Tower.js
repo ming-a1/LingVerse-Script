@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         自动扫荡塔
 // @namespace    https://github.com/yourname/lingverse-sweeper
-// @version      1.0.3
-// @description  一键扫荡试炼塔（自动收功），支持次数限制、扫荡间隔、灵石监控、屏幕常亮、面板置顶
+// @version      1.0.4
+// @description  一键扫荡试炼塔（自动收功），支持次数限制、扫荡间隔、灵石监控、屏幕常亮、面板置顶。扫荡消耗直接读取 nextRefreshCost，确保准确。
 // @author       耀
 // @match        *://ling.muge.info/*
 // @grant        none
@@ -215,7 +215,7 @@
         const lingShiEl = document.getElementById('sweeper-lingShi');
         if (lingShiEl) {
             lingShiEl.textContent = formatLingShi(state.lingShi);
-            lingShiEl.title = state.lingShi.toLocaleString(); // 悬浮显示完整数字
+            lingShiEl.title = state.lingShi.toLocaleString();
         }
     }
 
@@ -224,18 +224,35 @@
         if (bestEl) bestEl.textContent = state.bestFloor || '--';
     }
 
-    // ---------- 扫荡核心 ----------
+    // ---------- 扫荡核心（修正：消耗从 nextRefreshCost 读取）----------
     async function performSweep() {
-        const before = await fetchPlayerResources();
+        // 1. 获取本次扫荡的预期消耗（nextRefreshCost）
+        let cost = 0;
+        try {
+            const infoRes = await apiGet('/api/trial-tower/info');
+            if (infoRes?.code === 200 && infoRes.data) {
+                cost = infoRes.data.nextRefreshCost || 0;
+                if (cost === 0) {
+                    addLog('warn', 'nextRefreshCost 为 0，可能无法扫荡');
+                }
+            } else {
+                addLog('error', '获取扫荡消耗失败');
+                return { success: false };
+            }
+        } catch (e) {
+            addLog('error', '获取扫荡消耗异常: ' + (e.message || e));
+            return { success: false };
+        }
 
+        // 2. 执行扫荡
         try {
             const res = await apiPost('/api/trial-tower/sweep');
             if (res?.code === 200) {
                 let reachedFloor = res.data?.reachedFloor ?? 0;
                 if (reachedFloor === 0) {
-                    const infoRes = await apiGet('/api/trial-tower/info');
-                    if (infoRes?.code === 200 && infoRes.data) {
-                        reachedFloor = infoRes.data.activeFloor || 0;
+                    const infoRes2 = await apiGet('/api/trial-tower/info');
+                    if (infoRes2?.code === 200 && infoRes2.data) {
+                        reachedFloor = infoRes2.data.activeFloor || 0;
                     }
                 }
                 addLog('success', `扫荡成功，抵达第 ${reachedFloor} 层`);
@@ -245,9 +262,7 @@
                     updateBestFloorDisplay();
                 }
 
-                await fetchPlayerResources();
-                const after = { lingShi: state.lingShi };
-                const costLingShi = Math.max(0, before.lingShi - after.lingShi);
+                // 获取藏宝图数量
                 let gainMap = 0;
                 if (res.data?.rewardMaps !== undefined && res.data?.rewardMaps !== null) {
                     gainMap = res.data.rewardMaps;
@@ -259,7 +274,12 @@
                     const mapItem = res.data.items.find(i => i.name === '藏宝图' || i.id === 'treasure_map');
                     if (mapItem) gainMap = mapItem.count || mapItem.amount || 0;
                 }
-                return { success: true, costLingShi, gainMap, reachedFloor };
+
+                // 刷新灵石显示（仅用于界面展示，不计入消耗）
+                await fetchPlayerResources();
+
+                // 返回结果，cost 直接使用 nextRefreshCost
+                return { success: true, costLingShi: cost, gainMap, reachedFloor };
             } else {
                 addLog('error', '扫荡失败: ' + (res?.message || '未知错误'));
                 return { success: false };
@@ -580,7 +600,7 @@
         container.innerHTML = `
             <div class="atp-panel" id="sweeper-panel">
                 <div class="atp-header" id="sweeper-header">
-                    <span class="atp-title"><span class="atp-title-icon">⚔️</span><span>自动扫荡 v1.0.3</span></span>
+                    <span class="atp-title"><span class="atp-title-icon">⚔️</span><span>自动扫荡 v1.0.4</span></span>
                     <div class="atp-header-btns">
                         <button class="atp-header-btn" id="sweeper-pin-btn" title="面板置顶">⇧</button>
                         <button class="atp-header-btn" id="sweeper-config-btn" title="配置">⚙</button>
@@ -693,7 +713,7 @@
         document.getElementById('sweeper-pin-btn').addEventListener('click', togglePin);
     }
 
-    // ---------- 样式与主题 ----------
+    // ---------- 样式与主题（保留原样）----------
     function injectStyles() {
         if (document.getElementById('sweeper-styles')) return;
         const style = document.createElement('style');
@@ -839,7 +859,7 @@
         loadConfig();
         syncWakeLock();
         buildPanel();
-        addLog('info', '自动扫荡塔 v1.0.3 已就绪');
+        addLog('info', '自动扫荡塔 v1.0.4 已就绪');
         addLog('info', 'Token 验证通过');
     }
 
