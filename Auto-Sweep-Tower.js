@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         自动扫荡塔
 // @namespace    https://github.com/yourname/lingverse-sweeper
-// @version      1.0.4
-// @description  一键扫荡试炼塔（自动收功），支持次数限制、扫荡间隔、灵石监控、屏幕常亮、面板置顶。扫荡消耗直接读取 nextRefreshCost，确保准确。
+// @version      1.0.5
+// @description  一键扫荡试炼塔（自动收功），支持次数限制（0=不限，最大100万次）、扫荡间隔、灵石监控、屏幕常亮、面板置顶。扫荡消耗直接读取 nextRefreshCost。
 // @author       耀
 // @match        *://ling.muge.info/*
 // @grant        none
@@ -77,7 +77,7 @@
     function loadConfig() {
         const c = loadJSON(STORAGE_KEY);
         if (c) {
-            if (typeof c.maxSweepCount === 'number') state.maxSweepCount = Math.max(0, Math.min(999, c.maxSweepCount));
+            if (typeof c.maxSweepCount === 'number') state.maxSweepCount = Math.max(0, Math.min(1000000, c.maxSweepCount));
             if (typeof c.sweepIntervalMs === 'number') state.sweepIntervalMs = Math.max(100, Math.min(5000, c.sweepIntervalMs));
             if (typeof c.screenAlwaysOn === 'boolean') state.screenAlwaysOn = c.screenAlwaysOn;
         }
@@ -226,7 +226,6 @@
 
     // ---------- 扫荡核心（修正：消耗从 nextRefreshCost 读取）----------
     async function performSweep() {
-        // 1. 获取本次扫荡的预期消耗（nextRefreshCost）
         let cost = 0;
         try {
             const infoRes = await apiGet('/api/trial-tower/info');
@@ -244,7 +243,6 @@
             return { success: false };
         }
 
-        // 2. 执行扫荡
         try {
             const res = await apiPost('/api/trial-tower/sweep');
             if (res?.code === 200) {
@@ -262,7 +260,6 @@
                     updateBestFloorDisplay();
                 }
 
-                // 获取藏宝图数量
                 let gainMap = 0;
                 if (res.data?.rewardMaps !== undefined && res.data?.rewardMaps !== null) {
                     gainMap = res.data.rewardMaps;
@@ -275,10 +272,7 @@
                     if (mapItem) gainMap = mapItem.count || mapItem.amount || 0;
                 }
 
-                // 刷新灵石显示（仅用于界面展示，不计入消耗）
                 await fetchPlayerResources();
-
-                // 返回结果，cost 直接使用 nextRefreshCost
                 return { success: true, costLingShi: cost, gainMap, reachedFloor };
             } else {
                 addLog('error', '扫荡失败: ' + (res?.message || '未知错误'));
@@ -390,7 +384,7 @@
                 </div>
                 <div class="atp-config-body">
                     <div class="atp-section-title">✦ 扫荡设置</div>
-                    <div class="atp-toggle-row"><span>最大扫荡次数 (0=不限)</span><input type="number" id="cfg-max-sweep" value="${state.maxSweepCount}" min="0" max="999" style="width:70px;"></div>
+                    <div class="atp-toggle-row"><span>最大扫荡次数 (0=不限)</span><input type="number" id="cfg-max-sweep" value="${state.maxSweepCount}" min="0" max="1000000" style="width:90px;"></div>
                     <div class="atp-toggle-row" style="flex-wrap:wrap;"><span>扫荡间隔 (毫秒)</span><input type="number" id="cfg-sweep-interval" value="${state.sweepIntervalMs}" min="100" max="5000" step="100" style="width:90px;"><div id="interval-warn" style="width:100%;font-size:12px;color:#e7a33e;margin-top:4px;"></div></div>
                     <div class="atp-section-title">✦ 其他</div>
                     <label class="atp-toggle-row"><span>屏幕常亮</span><input type="checkbox" id="cfg-screen-always-on" ${state.screenAlwaysOn ? 'checked' : ''}></label>
@@ -412,7 +406,10 @@
         overlay.addEventListener('click', e => { if (e.target === overlay) closeConfigModal(); });
         overlay.querySelector('#sweeper-config-close').addEventListener('click', closeConfigModal);
         overlay.querySelector('#sweeper-config-save').addEventListener('click', () => {
-            state.maxSweepCount = Math.max(0, Math.min(999, parseInt(overlay.querySelector('#cfg-max-sweep').value, 10) || 5));
+            let maxVal = parseInt(overlay.querySelector('#cfg-max-sweep').value, 10);
+            if (isNaN(maxVal)) maxVal = 5;
+            state.maxSweepCount = Math.max(0, Math.min(1000000, maxVal));
+            
             state.sweepIntervalMs = Math.max(100, Math.min(5000, parseInt(intervalInput.value, 10) || 1000));
             state.screenAlwaysOn = overlay.querySelector('#cfg-screen-always-on').checked;
             saveConfig();
@@ -600,7 +597,7 @@
         container.innerHTML = `
             <div class="atp-panel" id="sweeper-panel">
                 <div class="atp-header" id="sweeper-header">
-                    <span class="atp-title"><span class="atp-title-icon">⚔️</span><span>自动扫荡 v1.0.4</span></span>
+                    <span class="atp-title"><span class="atp-title-icon">⚔️</span><span>自动扫荡 v1.0.5</span></span>
                     <div class="atp-header-btns">
                         <button class="atp-header-btn" id="sweeper-pin-btn" title="面板置顶">⇧</button>
                         <button class="atp-header-btn" id="sweeper-config-btn" title="配置">⚙</button>
@@ -859,7 +856,7 @@
         loadConfig();
         syncWakeLock();
         buildPanel();
-        addLog('info', '自动扫荡塔 v1.0.4 已就绪');
+        addLog('info', '自动扫荡塔 v1.0.5 已就绪');
         addLog('info', 'Token 验证通过');
     }
 
