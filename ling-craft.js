@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         自动炼制
 // @namespace    https://ling.muge.info/
-// @version      1.3.7
+// @version      1.3.8
 // @description  自动炼造 & 符篆批量使用
 // @author       耀
 // @match        https://ling.muge.info/*
@@ -386,6 +386,11 @@
         if (tab === 'craft') loadRecipes(currentTask);
     }
 
+    // ==================== 重置函数 ====================
+    function resetAllData() {
+        Object.keys(localStorage).filter(k => k.startsWith('ac_')).forEach(k => localStorage.removeItem(k));
+    }
+
     function createPanel(){
         document.getElementById('auto-craft-panel')?.remove();
         isRunning=loadRunningState();
@@ -399,7 +404,10 @@
         p.innerHTML=`
             <div class="panel-header" id="drag-handle">
                 <span class="panel-title">⚒️ 自动炼制</span>
-                <div class="header-btns"><button id="min-btn" title="最小化">─</button></div>
+                <div class="header-btns">
+                    <button id="reset-btn" title="重置数据">🔄</button>
+                    <button id="min-btn" title="最小化">─</button>
+                </div>
             </div>
             <div class="panel-body">
                 <div class="section-title">▼ 功能选择</div>
@@ -462,6 +470,29 @@
         document.querySelectorAll('#mode-btns button').forEach(b=>{b.classList.remove('active');if(b.dataset.mode===currentTask)b.classList.add('active');});
         document.querySelectorAll('#mode-btns button').forEach(b=>b.addEventListener('click',function(){if(isRunning)return;document.querySelectorAll('#mode-btns button').forEach(x=>x.classList.remove('active'));this.classList.add('active');currentTask=this.dataset.mode;saveLastMode(currentTask);document.getElementById('dl').value=DEFAULT_DELAY[currentTask];saveSettings();loadRecipes(currentTask);}));
         document.getElementById('min-btn').addEventListener('click',()=>{saveSettings();saveTalismanSettingsFromUI();saveProgress(isRunning?Math.max(0,savedProgress.current):0,isRunning?savedProgress.total:0,document.getElementById('status')?.textContent||'');minimize();});
+
+        // 重置按钮
+        document.getElementById('reset-btn').addEventListener('click', async () => {
+            if (await confirm('确定要重置所有设置吗？\n这将清除面板位置、配方记忆、符篆设置等。')) {
+                resetAllData();
+                toast('数据已重置，即将刷新面板...');
+                setTimeout(() => {
+                    // 重置内存状态
+                    savedLogs = [];
+                    savedProgress = { current:0, total:0, status:'就绪 - 请选择配方' };
+                    savedCfg = { batch:50, loops:50, delay:DEFAULT_DELAY[currentTask], buy:false };
+                    currentTask = 'alchemy';
+                    selectedRecipeIdx = -1;
+                    isRunning = false;
+                    tlhRunning = false;
+                    activeTab = 'craft';
+                    talismanLogs = [];
+                    // 重新创建面板
+                    createPanel();
+                }, 500);
+            }
+        });
+
         document.getElementById('clear-log').addEventListener('click',clearLog);
         document.getElementById('start-btn').addEventListener('click',start);
         document.getElementById('stop-btn').addEventListener('click',()=>{stopRequested=true;setStatus('停止中...');});
