@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         操作区折叠
 // @namespace    https://ling.muge.info/
-// @version      1.5.4
+// @version      1.6.5
 // @description  在操作按钮上方添加收起/展开按钮，点击可向下收起或展开操作区域面板（含底部功能按钮组）
 // @author       Minis
 // @match        https://ling.muge.info/*
 // @grant        none
 // @run-at       document-idle
+// @updateURL    https://v4.gh-proxy.org/https://raw.githubusercontent.com/ming-a1/LingVerse-Script/main/action-panel-toggle.user.js
+// @downloadURL  https://v4.gh-proxy.org/https://raw.githubusercontent.com/ming-a1/LingVerse-Script/main/action-panel-toggle.user.js
 // ==/UserScript==
 
 (function () {
@@ -19,20 +21,50 @@
   // ---- 样式 ----
   const style = document.createElement('style');
   style.textContent = `
-    /* 右侧操作区折叠按钮 */
+    /* 右侧操作区折叠按钮容器 */
+    #meditation-toggle-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      flex: 0 0 100%;
+      box-sizing: border-box;
+    }
     #meditation-toggle-btn {
       display: flex; align-items: center; justify-content: center;
-      width: 100%; height: 24px;
+      flex: 1; height: 24px;
       background: rgba(138, 94, 30, 0.06);
       border: 1px solid rgba(138, 94, 30, 0.15);
       border-radius: 5px;
       color: rgb(138, 94, 30); font-size: 11px; font-weight: 500;
       font-family: inherit; letter-spacing: 0.5px;
       cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
-      transition: background 0.2s; flex: 0 0 100%; box-sizing: border-box;
+      transition: background 0.2s;
     }
     #meditation-toggle-btn:active { background: rgba(138, 94, 30, 0.12); }
     .meditation-toggle-hide { display: none !important; }
+
+    /* 冥想状态信息（默认隐藏） */
+    #meditation-info {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: rgb(138, 94, 30);
+      font-family: inherit;
+      white-space: nowrap;
+    }
+    #meditation-info.visible { display: flex; }
+    #meditation-info .med-stop-btn {
+      background: rgba(138, 94, 30, 0.1);
+      border: 1px solid rgba(138, 94, 30, 0.2);
+      border-radius: 3px;
+      color: rgb(138, 94, 30);
+      font-size: 10px;
+      padding: 2px 8px;
+      cursor: pointer;
+    }
+    #meditation-info .med-stop-btn:active { background: rgba(138, 94, 30, 0.2); }
 
     /* 左侧区块折叠按钮 */
     .section-toggle-btn {
@@ -78,25 +110,77 @@
   `;
   document.head.appendChild(style);
 
+  // ---- 检测是否在冥想 ----
+  function isMeditating() {
+    const meditateBtn = document.querySelector('#meditateBtn');
+    return meditateBtn && meditateBtn.classList.contains('meditating');
+  }
+
   // ---- 右侧操作区折叠 ----
+  let isActionCollapsed = false;
+
   function init() {
     const primaryGroup = document.querySelector('.action-group--primary');
     const secondaryGroup = document.querySelector('#bottomBarActionGroup');
     const actionBar = document.querySelector('.action-bar');
     if (!primaryGroup || !actionBar) { setTimeout(init, 500); return; }
-    if (document.querySelector('#meditation-toggle-btn')) return;
+    if (document.querySelector('#meditation-toggle-wrap')) return;
 
+    // 创建按钮容器
+    const wrap = document.createElement('div');
+    wrap.id = 'meditation-toggle-wrap';
+    actionBar.insertBefore(wrap, primaryGroup);
+
+    // 创建折叠按钮
     const toggleBtn = document.createElement('button');
     toggleBtn.id = 'meditation-toggle-btn';
     toggleBtn.textContent = '收起操作区';
-    actionBar.insertBefore(toggleBtn, primaryGroup);
+    wrap.appendChild(toggleBtn);
 
+    // 创建冥想信息（识 X% + 收功）
+    const medInfo = document.createElement('div');
+    medInfo.id = 'meditation-info';
+    medInfo.innerHTML = '<span id="med-spirit-percent">识 ---%</span><button class="med-stop-btn" id="med-stop-btn">收功</button>';
+    wrap.appendChild(medInfo);
+
+    // 收工按钮点击事件
+    medInfo.querySelector('#med-stop-btn').addEventListener('click', function (e) {
+      e.preventDefault(); e.stopPropagation();
+      if (typeof handleStopMeditate === 'function') handleStopMeditate();
+    });
+
+    // 定时更新冥想状态
+    function updateMeditationState() {
+      const percentEl = document.querySelector('#med-spirit-percent');
+      if (!percentEl) return;
+
+      if (isActionCollapsed && isMeditating()) {
+        const spiritEl = document.querySelector('.med-stat--spirit');
+        if (spiritEl) {
+          const text = spiritEl.textContent;
+          const match = text.match(/(\d+)%/);
+          if (match) percentEl.textContent = '识 ' + match[1] + '%';
+        }
+        medInfo.classList.add('visible');
+      } else {
+        medInfo.classList.remove('visible');
+      }
+    }
+    setInterval(updateMeditationState, 2000);
+
+    // 冥想修炼中状态栏
+    const meditationBar = document.querySelector('#meditationBar');
+
+    // 恢复上次状态
     const wasCollapsed = localStorage.getItem(PANEL_KEY) === '1';
     if (wasCollapsed) {
       primaryGroup.classList.add('meditation-toggle-hide');
       if (secondaryGroup) secondaryGroup.classList.add('meditation-toggle-hide');
+      if (meditationBar) meditationBar.classList.add('meditation-toggle-hide');
       toggleBtn.classList.add('collapsed');
       toggleBtn.textContent = '展开操作区';
+      isActionCollapsed = true;
+      updateMeditationState();
     }
 
     toggleBtn.addEventListener('click', function (e) {
@@ -105,15 +189,21 @@
       if (isHidden) {
         primaryGroup.classList.remove('meditation-toggle-hide');
         if (secondaryGroup) secondaryGroup.classList.remove('meditation-toggle-hide');
+        if (meditationBar) meditationBar.classList.remove('meditation-toggle-hide');
         toggleBtn.classList.remove('collapsed');
         toggleBtn.textContent = '收起操作区';
+        isActionCollapsed = false;
+        medInfo.classList.remove('visible');
         localStorage.setItem(PANEL_KEY, '0');
       } else {
         primaryGroup.classList.add('meditation-toggle-hide');
         if (secondaryGroup) secondaryGroup.classList.add('meditation-toggle-hide');
+        if (meditationBar) meditationBar.classList.add('meditation-toggle-hide');
         toggleBtn.classList.add('collapsed');
         toggleBtn.textContent = '展开操作区';
+        isActionCollapsed = true;
         localStorage.setItem(PANEL_KEY, '1');
+        updateMeditationState();
       }
     });
   }
@@ -145,7 +235,6 @@
       if (wasCollapsed) {
         contentElements.forEach(function (c) { c.classList.add('section-content-hide'); });
         btn.textContent = '▼';
-        // 如果"其他"是最后一个区块且已折叠，也隐藏轮回等
         if (i === sections.length - 1) {
           playerPanel.querySelectorAll('.player-panel-samsara-entry, .panel-server-credit, .player-panel-footer').forEach(function(el) {
             el.style.display = 'none';
@@ -160,7 +249,6 @@
           contentElements.forEach(function (c) { c.classList.remove('section-content-hide'); });
           btn.textContent = '▲';
           localStorage.setItem(storageKey, '0');
-          // 展开"其他"时也展开轮回、服务器、底部栏
           if (i === sections.length - 1) {
             playerPanel.querySelectorAll('.player-panel-samsara-entry, .panel-server-credit, .player-panel-footer').forEach(function(el) {
               el.style.display = '';
@@ -170,7 +258,6 @@
           contentElements.forEach(function (c) { c.classList.add('section-content-hide'); });
           btn.textContent = '▼';
           localStorage.setItem(storageKey, '1');
-          // 收起"其他"时也收起轮回、服务器、底部栏
           if (i === sections.length - 1) {
             playerPanel.querySelectorAll('.player-panel-samsara-entry, .panel-server-credit, .player-panel-footer').forEach(function(el) {
               el.style.display = 'none';
@@ -188,31 +275,27 @@
 
   // ---- 左侧面板整体贴边折叠（可拖动，仅PC端） ----
   function initPanelCollapse() {
-    if (!isPC()) return; // 移动端不显示整体收起按钮
+    if (!isPC()) return;
     const playerPanel = document.querySelector('#playerPanel');
     if (!playerPanel) { setTimeout(initPanelCollapse, 500); return; }
     if (document.querySelector('#player-panel-side-toggle')) return;
 
-    // 创建侧边展开按钮
     const sideBtn = document.createElement('button');
     sideBtn.id = 'player-panel-side-toggle';
     sideBtn.textContent = '展开面板';
     document.body.appendChild(sideBtn);
 
-    // 恢复上次位置
     const savedTop = localStorage.getItem('ling_panel_btn_top');
     if (savedTop) sideBtn.style.top = savedTop + 'px';
     else sideBtn.style.top = '50%';
     sideBtn.style.transform = 'none';
 
-    // 恢复上次状态
     const wasCollapsed = localStorage.getItem(PANEL_KEY_LEFT) === '1';
     if (wasCollapsed) {
       playerPanel.classList.add('panel-collapsed');
       sideBtn.style.display = 'flex';
     }
 
-    // 点击展开
     sideBtn.addEventListener('click', function (e) {
       e.preventDefault(); e.stopPropagation();
       playerPanel.classList.remove('panel-collapsed');
@@ -221,7 +304,6 @@
       localStorage.setItem(PANEL_KEY_LEFT, '0');
     });
 
-    // 拖动功能
     let isDragging = false, startY = 0, startTop = 0;
     sideBtn.addEventListener('mousedown', function (e) {
       isDragging = true;
@@ -232,7 +314,6 @@
     document.addEventListener('mousemove', function (e) {
       if (!isDragging) return;
       let newTop = startTop + (e.clientY - startY);
-      // 限制在视窗范围内，不脱离左侧边
       newTop = Math.max(0, Math.min(window.innerHeight - 60, newTop));
       sideBtn.style.top = newTop + 'px';
     });
@@ -243,7 +324,6 @@
       }
     });
 
-    // 整体折叠按钮
     const firstTitle = playerPanel.querySelector('.panel-section h3');
     if (firstTitle) {
       const collapseAllBtn = document.createElement('button');
@@ -263,21 +343,9 @@
     }
   }
 
-  // ---- MutationObserver 监听DOM变化并重新移动元素 ----
-  function startObserver() {
-    const playerPanel = document.querySelector('#playerPanel');
-    if (!playerPanel) return;
-
-    const observer = new MutationObserver(function () {
-      moveElements();
-    });
-    observer.observe(playerPanel, { childList: true, subtree: true });
+  // ---- 初始化 ----
+  if (document.readyState === 'complete') { init(); initSections(); initPanelCollapse(); } else {
+    window.addEventListener('load', function() { init(); initSections(); initPanelCollapse(); });
   }
-
-  if (document.readyState === 'complete') { init(); initSections(); initPanelCollapse(); startObserver(); } else {
-    window.addEventListener('load', function() { init(); initSections(); initPanelCollapse(); startObserver(); });
-  }
-  setTimeout(function() { init(); initSections(); initPanelCollapse(); startObserver(); }, 2000);
-  setTimeout(moveElements, 3000);
-  setTimeout(moveElements, 5000);
+  setTimeout(function() { init(); initSections(); initPanelCollapse(); }, 2000);
 })();
